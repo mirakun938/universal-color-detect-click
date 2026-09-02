@@ -1,21 +1,22 @@
--- [[ COLOR OVERLAY DETECTOR & AUTO CLICKER ]] --
+-- [[ HOLLOW CIRCLE COLOR DETECTOR & AUTO CLICKER ]] --
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local RunService = game:GetService("RunService")
 local GuiService = game:GetService("GuiService")
+local CoreGui = game:GetService("CoreGui")
 
 local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
 
 -- 1. ScreenGui หลัก
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "ColorOverlayDetectorGui"
+screenGui.Name = "HollowCircleColorGui"
 screenGui.ResetOnSpawn = false
 screenGui.DisplayOrder = 999999
 screenGui.Parent = playerGui
 
--- ฟังก์ชันทำให้ UI ลากวางได้
+-- ฟังก์ชันทำให้ Ring ลากวางได้
 local function makeDraggable(guiObject)
     local dragging, dragInput, dragStart, startPos
     guiObject.InputBegan:Connect(function(input)
@@ -44,58 +45,50 @@ local function makeDraggable(guiObject)
     end)
 end
 
--- =========================================================
--- [UI 1: กรอบตรวจจับสี (Detect Frame)]
--- =========================================================
-local detectFrame = Instance.new("Frame")
-detectFrame.Name = "DetectFrame"
-detectFrame.Parent = screenGui
-detectFrame.Size = UDim2.new(0, 70, 0, 70)
-detectFrame.Position = UDim2.new(0.3, 0, 0.4, 0)
-detectFrame.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-detectFrame.BackgroundTransparency = 0.6
-detectFrame.BorderColor3 = Color3.fromRGB(255, 255, 255)
-detectFrame.BorderSizePixel = 2
-detectFrame.Active = true
+-- ฟังก์ชันสร้าง "วงกลมกลวง" (Hollow Ring) ที่ไม่บังตรงกลาง
+local function createHollowRing(name, color, initialPos, labelText)
+    local ringFrame = Instance.new("Frame")
+    ringFrame.Name = name
+    ringFrame.Parent = screenGui
+    ringFrame.Size = UDim2.new(0, 60, 0, 60)
+    ringFrame.Position = initialPos
+    ringFrame.BackgroundTransparency = 1 -- ตรงกลางโปร่งใส 100% ไม่บังการกด
+    ringFrame.Active = true
 
-local detectLabel = Instance.new("TextLabel")
-detectLabel.Parent = detectFrame
-detectLabel.Size = UDim2.new(1, 0, 1, 0)
-detectLabel.BackgroundTransparency = 1
-detectLabel.Text = "1. จุดตรวจสี"
-detectLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-detectLabel.TextSize = 12
-detectLabel.Font = Enum.Font.SourceSansBold
+    -- เส้นขอบวงกลมกลวงนอก
+    local stroke = Instance.new("UIStroke")
+    stroke.Parent = ringFrame
+    stroke.Color = color
+    stroke.Thickness = 4
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 
-makeDraggable(detectFrame)
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(1, 0)
+    corner.Parent = ringFrame
 
--- =========================================================
--- [UI 2: กรอบจุดกด (Click Target Frame)]
--- =========================================================
-local clickFrame = Instance.new("Frame")
-clickFrame.Name = "ClickFrame"
-clickFrame.Parent = screenGui
-clickFrame.Size = UDim2.new(0, 70, 0, 70)
-clickFrame.Position = UDim2.new(0.6, 0, 0.4, 0)
-clickFrame.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
-clickFrame.BackgroundTransparency = 0.6
-clickFrame.BorderColor3 = Color3.fromRGB(255, 255, 255)
-clickFrame.BorderSizePixel = 2
-clickFrame.Active = true
+    -- ข้อความกำกับ
+    local label = Instance.new("TextLabel")
+    label.Parent = ringFrame
+    label.Size = UDim2.new(1, 0, 0, 18)
+    label.Position = UDim2.new(0, 0, -0.35, 0)
+    label.BackgroundTransparency = 1
+    label.Text = labelText
+    label.TextColor3 = color
+    label.TextSize = 11
+    label.Font = Enum.Font.SourceSansBold
 
-local clickLabel = Instance.new("TextLabel")
-clickLabel.Parent = clickFrame
-clickLabel.Size = UDim2.new(1, 0, 1, 0)
-clickLabel.BackgroundTransparency = 1
-clickLabel.Text = "2. จุดกด"
-clickLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-clickLabel.TextSize = 12
-clickLabel.Font = Enum.Font.SourceSansBold
-
-makeDraggable(clickFrame)
+    makeDraggable(ringFrame)
+    return ringFrame
+end
 
 -- =========================================================
--- [UI เมนูควบคุมการเลือกสี & สวิตช์เปิด/ปิด]
+-- [สร้างจุดวางแบบวงกลมกลวง 2 วง]
+-- =========================================================
+local detectRing = createHollowRing("DetectRing", Color3.fromRGB(255, 50, 50), UDim2.new(0.3, 0, 0.4, 0), "1. จุดตรวจจับสี")
+local clickRing = createHollowRing("ClickRing", Color3.fromRGB(50, 255, 50), UDim2.new(0.6, 0, 0.4, 0), "2. จุดกด")
+
+-- =========================================================
+-- [UI เมนูควบคุม]
 -- =========================================================
 local controlPanel = Instance.new("Frame")
 controlPanel.Name = "ControlPanel"
@@ -110,18 +103,17 @@ local title = Instance.new("TextLabel")
 title.Parent = controlPanel
 title.Size = UDim2.new(1, 0, 0, 25)
 title.BackgroundTransparency = 1
-title.Text = "Color Overlay Detector"
+title.Text = "Hollow Ring Color Detector"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.TextSize = 13
 title.Font = Enum.Font.SourceSansBold
 
--- แสดงสีเป้าหมายที่เลือก
 local colorPreview = Instance.new("Frame")
 colorPreview.Name = "ColorPreview"
 colorPreview.Parent = controlPanel
 colorPreview.Size = UDim2.new(0, 20, 0, 20)
 colorPreview.Position = UDim2.new(0.08, 0, 0.25, 0)
-colorPreview.BackgroundColor3 = Color3.fromRGB(255, 0, 0) -- ค่าเริ่มต้น: สีแดง
+colorPreview.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
 Instance.new("UICorner", colorPreview).CornerRadius = UDim.new(1, 0)
 
 local colorText = Instance.new("TextLabel")
@@ -129,12 +121,11 @@ colorText.Parent = controlPanel
 colorText.Size = UDim2.new(0.7, 0, 0, 20)
 colorText.Position = UDim2.new(0.22, 0, 0.25, 0)
 colorText.BackgroundTransparency = 1
-colorText.Text = "สีหลักที่ต้องการตรวจจับ"
+colorText.Text = "สีเป้าหมายหลัก"
 colorText.TextColor3 = Color3.fromRGB(200, 200, 200)
 colorText.TextSize = 11
 colorText.TextXAlignment = Enum.TextXAlignment.Left
 
--- ปุ่มเลือก Set สี Quick Presets
 local presets = {
     { Name = "Red", Color = Color3.fromRGB(255, 0, 0) },
     { Name = "Green", Color = Color3.fromRGB(0, 255, 0) },
@@ -143,7 +134,7 @@ local presets = {
     { Name = "White", Color = Color3.fromRGB(255, 255, 255) },
 }
 
-local selectedTargetColor = Color3.fromRGB(255, 0, 0) -- ค่าสีเป้าหมายที่ตั้งไว้
+local selectedTargetColor = Color3.fromRGB(255, 0, 0)
 local isRunning = false
 
 for i, p in ipairs(presets) do
@@ -161,18 +152,16 @@ for i, p in ipairs(presets) do
     end)
 end
 
--- ปุ่มดึงสีปัจจุบันที่จุดตรวจจับ (Lock Current Color)
 local lockColorBtn = Instance.new("TextButton")
 lockColorBtn.Parent = controlPanel
 lockColorBtn.Size = UDim2.new(0.84, 0, 0, 20)
 lockColorBtn.Position = UDim2.new(0.08, 0, 0.68, 0)
 lockColorBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-lockColorBtn.Text = "🎯 ดูดสีจากหน้าจอตรงจุดตรวจ"
+lockColorBtn.Text = "🎯 ดูดสี UI เกมจากกลางวงกลม"
 lockColorBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 lockColorBtn.TextSize = 11
 Instance.new("UICorner", lockColorBtn).CornerRadius = UDim.new(0, 4)
 
--- ปุ่ม ON/OFF
 local toggleBtn = Instance.new("TextButton")
 toggleBtn.Parent = controlPanel
 toggleBtn.Size = UDim2.new(0.84, 0, 0, 22)
@@ -187,22 +176,34 @@ Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 4)
 makeDraggable(controlPanel)
 
 -- =========================================================
--- [ฟังก์ชันอ่านสี & ตรวจจับการโดนทับ]
+-- [DEEP SCAN COLOR DETECTION (อ่านค่าสี UI เกมจริง)]
 -- =========================================================
-local function getColorAtDetectZone()
-    local detectCenter = detectFrame.AbsolutePosition + (detectFrame.AbsoluteSize / 2)
+local function getDeepGameGuiColor()
+    local detectCenter = detectRing.AbsolutePosition + (detectRing.AbsoluteSize / 2)
+    
+    -- 1. สแกนจาก PlayerGui ก่อน
     local guis = playerGui:GetGuiObjectsAtPosition(detectCenter.X, detectCenter.Y)
-
     for _, gui in ipairs(guis) do
         if not gui:IsDescendantOf(screenGui) and gui:IsA("GuiObject") and gui.Visible then
-            return gui.BackgroundColor3
+            if gui.BackgroundColor3 then return gui.BackgroundColor3 end
         end
     end
+
+    -- 2. สแกนจาก CoreGui (กรณี UI เกมเขียนซ่อนในระดับ Core)
+    pcall(function()
+        local coreGuis = CoreGui:GetGuiObjectsAtPosition(detectCenter.X, detectCenter.Y)
+        for _, gui in ipairs(coreGuis) do
+            if not gui:IsDescendantOf(screenGui) and gui:IsA("GuiObject") and gui.Visible then
+                if gui.BackgroundColor3 then return gui.BackgroundColor3 end
+            end
+        end
+    end)
+
     return nil
 end
 
 lockColorBtn.MouseButton1Click:Connect(function()
-    local currentColor = getColorAtDetectZone()
+    local currentColor = getDeepGameGuiColor()
     if currentColor then
         selectedTargetColor = currentColor
         colorPreview.BackgroundColor3 = currentColor
@@ -220,37 +221,36 @@ toggleBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- ลูปตรวจจับการทับของสี
-local overlayThreshold = 0.25 -- ความไวการโดนทับ (ยิ่งน้อยยิ่งไว)
+-- ลูปการทำงาน
+local overlayThreshold = 0.2
 
 RunService.RenderStepped:Connect(function()
     if not isRunning then return end
 
-    local currentColor = getColorAtDetectZone()
+    local currentColor = getDeepGameGuiColor()
     if currentColor then
-        -- เปรียบเทียบความต่างระหว่าง "สีหลักที่เลือก" กับ "สีปัจจุบันที่อยู่ตรงจุดตรวจ"
         local diffR = math.abs(currentColor.R - selectedTargetColor.R)
         local diffG = math.abs(currentColor.G - selectedTargetColor.G)
         local diffB = math.abs(currentColor.B - selectedTargetColor.B)
         local totalDifference = diffR + diffG + diffB
 
-        -- ถ้าความต่างสีเพิ่มขึ้นอย่างรวดเร็ว (แสดงว่ามีสีอื่นวิ่งมาทับสีหลัก)
+        -- ตรวจพบว่าสีถูกทับ/เปลี่ยนไป
         if totalDifference > overlayThreshold then
-            -- พิกัดจุดกด (Click Frame)
-            local clickCenter = clickFrame.AbsolutePosition + (clickFrame.AbsoluteSize / 2)
+            -- พิกัดศูนย์กลางรูวงกลมจุดกด
+            local clickCenter = clickRing.AbsolutePosition + (clickRing.AbsoluteSize / 2)
             local guiInset = GuiService:GetGuiInset()
             
             local targetX = clickCenter.X
             local targetY = clickCenter.Y + guiInset.Y
 
-            -- ส่งคลิก
+            -- ส่งคลิกตรงทะลุรูวงกลมลงไปที่ตัวเกม
             VirtualInputManager:SendMouseButtonEvent(targetX, targetY, 0, true, game, 1)
             task.wait(0.01)
             VirtualInputManager:SendMouseButtonEvent(targetX, targetY, 0, false, game, 1)
 
-            task.wait(0.15) -- Cooldown ป้องกันการกดซ้ำรัวเกินไป
+            task.wait(0.12) -- Cooldown
         end
     end
 end)
 
-print("🎯 [Color Overlay Detector] Ready! Set target color and start auto-clicking on overlay.")
+print("⭕ [Hollow Circle Detector] Ready! Center is transparent for accurate clicks.")
