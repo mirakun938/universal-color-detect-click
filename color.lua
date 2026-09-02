@@ -1,77 +1,63 @@
--- [[ PERFECT TIMING AUTO POUR SCRIPT ]] --
+-- [[ DIRECT BUTTON ACTIVATION AUTO POUR ]] --
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
-local GuiService = game:GetService("GuiService")
 
 local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
 
--- 🎯 ปรับช่วงมุมองศา (Degrees) ให้แคบลงตรงสีเขียวพอดี
--- ค่าเดิม -15 ถึง 15 กว้างเกินไป ให้ปรับเป็น -3 ถึง 3 (หรือ 0)
-local MIN_ANGLE = -4
-local MAX_ANGLE = 4
+local isFired = false
 
-local isAutoActive = true
-local isClicked = false
-
-print("✅ Perfect Auto Pour Loaded!")
+print("⚡ Direct Button Trigger Loaded!")
 
 RunService.RenderStepped:Connect(function()
-    if not isAutoActive then return end
-
     pcall(function()
         local buildUI = playerGui:FindFirstChild("BuildStationUI")
         if not buildUI or not buildUI.Enabled then 
-            isClicked = false
+            isFired = false
             return 
         end
 
         local pourMeter = buildUI:FindFirstChild("PourMeter")
         if not pourMeter or not pourMeter.Visible then 
-            isClicked = false
+            isFired = false
             return 
         end
 
         local indicator = pourMeter:FindFirstChild("Indicator")
+        local meterBar = pourMeter:FindFirstChild("MeterBar")
         local pourBtn = pourMeter:FindFirstChild("PourButton")
         
         if pourBtn and pourBtn:FindFirstChild("ActualButton") then
             pourBtn = pourBtn.ActualButton
         end
 
-        if indicator and pourBtn and indicator.Visible then
-            -- อ่านค่า Rotation ของเข็ม
-            local currentRotation = indicator.Rotation
+        if indicator and meterBar and pourBtn then
+            -- วัดตำแหน่ง X/Y จริงบนหน้าจอของเข็มเทียบกับจุดกลางแถบสีเขียว
+            local indX = indicator.AbsolutePosition.X + (indicator.AbsoluteSize.X / 2)
+            local barX = meterBar.AbsolutePosition.X + (meterBar.AbsoluteSize.X / 2)
             
-            -- ปรับแปลงมุมให้อยู่ในช่วง -180 ถึง 180
-            if currentRotation > 180 then
-                currentRotation = currentRotation - 360
-            end
+            -- ระยะห่างระหว่างเข็มกับจุดศูนย์กลางสีเขียว (พิกเซล)
+            local diff = math.abs(indX - barX)
 
-            -- ตรวจสอบว่าเข็มวิ่งเข้าโซนสีเขียวตรงกลางพอดีหรือยัง
-            if currentRotation >= MIN_ANGLE and currentRotation <= MAX_ANGLE then
-                if not isClicked then
-                    isClicked = true -- กันการกดซ้ำหลายรอบในมินิเกมเดียว
-                    
-                    local guiInset = GuiService:GetGuiInset()
-                    local clickX = pourBtn.AbsolutePosition.X + (pourBtn.AbsoluteSize.X / 2)
-                    local clickY = pourBtn.AbsolutePosition.Y + (pourBtn.AbsoluteSize.Y / 2) + guiInset.Y
-
-                    -- สั่งกดปุ่ม POUR ทันที
-                    VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, true, game, 1)
-                    task.wait(0.01)
-                    VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, false, game, 1)
-
-                    VirtualInputManager:SendTouchEvent(1, Enum.UserInputState.Begin, Vector3.new(clickX, clickY, 0), game)
-                    task.wait(0.01)
-                    VirtualInputManager:SendTouchEvent(1, Enum.UserInputState.End, Vector3.new(clickX, clickY, 0), game)
+            -- เมื่อเข็มวิ่งมาใกล้จุดกลางสีเขียว (ระยะห่างน้อยกว่า 15 พิกเซล)
+            if diff <= 15 and not isFired then
+                isFired = true
+                
+                -- 1. สั่งกดผ่าน Activated Event ของปุ่มโดยตรง (ไม่โดนบล็อก)
+                if firesignal then
+                    firesignal(pourBtn.Activated)
+                    firesignal(pourBtn.MouseButton1Click)
+                else
+                    -- 2. สำรอง: กรณี Executor ไม่รองรับ firesignal
+                    for _, connection in pairs(getconnections(pourBtn.MouseButton1Click)) do
+                        connection:Fire()
+                    end
+                    for _, connection in pairs(getconnections(pourBtn.Activated)) do
+                        connection:Fire()
+                    end
                 end
-            else
-                -- ถ้าเข็มไม่อยู่ในจุด ให้รีเซ็ตสถานะเตรียมกดรอบถัดไป
-                if math.abs(currentRotation) > 15 then
-                    isClicked = false
-                end
+            elseif diff > 30 then
+                isFired = false
             end
         end
     end)
