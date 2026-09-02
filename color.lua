@@ -1,4 +1,4 @@
--- [[ POSITION-BASED AUTO CLICKER (ตรวจจับตำแหน่งเข็ม) ]] --
+-- [[ AUTO POUR SCRIPT BASED ON DEX UI STRUCTURE ]] --
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
@@ -7,41 +7,57 @@ local GuiService = game:GetService("GuiService")
 local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
 
--- 1. ค้นหา UI ของตัวเกม (ต้องใส่ชื่อ Frame ของเข็ม และโซนสีเขียวให้ตรงกับตัวเกม)
--- คุณสามารถใช้ Dex Explorer ส่องดูชื่อ UI ในเกมได้
-local isRunning = true
+-- ตั้งค่ามุม (Degrees) ที่ต้องการให้กด
+-- แถบสีเขียวจะอยู่ช่วงมุมกลางๆ (ค่าเริ่มต้นลองตั้งไว้ที่ -10 ถึง 20 องศา หรือปรับตามจริงได้)
+local MIN_ANGLE = -15
+local MAX_ANGLE = 15
+
+local isAutoActive = true
+
+print("✅ Auto Pour Loaded! Waiting for Meter...")
 
 RunService.RenderStepped:Connect(function()
-    if not isRunning then return end
+    if not isAutoActive then return end
 
     pcall(function()
-        -- ตัวอย่าง: ดึง UI เข็ม และ UI โซนเป้าหมายจากเกมจริง
-        -- (เปลี่ยน path ให้ตรงกับโครงสร้าง UI ในเกม)
-        local barGui = playerGui:FindFirstChild("DrinkGui") or playerGui:FindFirstChild("PourGui")
-        if not barGui then return end
+        local buildUI = playerGui:FindFirstChild("BuildStationUI")
+        if not buildUI or not buildUI.Enabled then return end
 
-        local pointer = barGui:FindFirstChild("Pointer", true) -- ตัวเข็มที่วิ่ง
-        local targetZone = barGui:FindFirstChild("GreenZone", true) or barGui:FindFirstChild("Target", true) -- โซนสีเขียว
+        local pourMeter = buildUI:FindFirstChild("PourMeter")
+        if not pourMeter then return end
 
-        if pointer and targetZone then
-            local pointerPos = pointer.AbsolutePosition.Y
-            local targetMinY = targetZone.AbsolutePosition.Y
-            local targetMaxY = targetMinY + targetZone.AbsoluteSize.Y
+        local indicator = pourMeter:FindFirstChild("Indicator")
+        local pourBtn = pourMeter:FindFirstChild("PourButton")
+        
+        if pourBtn and pourBtn:FindFirstChild("ActualButton") then
+            pourBtn = pourBtn.ActualButton
+        end
 
-            -- ถ้าตำแหน่ง Y ของเข็ม วิ่งเข้ามาอยู่ในช่วง Y ของโซนสีเขียว
-            if pointerPos >= targetMinY and pointerPos <= targetMaxY then
-                -- สั่งกดปุ่ม
+        if indicator and pourBtn and indicator.Visible then
+            -- อ่านค่า Rotation ของเข็ม
+            local currentRotation = indicator.Rotation
+            
+            -- ปรับมุมให้อยู่ในช่วง -180 ถึง 180
+            if currentRotation > 180 then
+                currentRotation = currentRotation - 360
+            end
+
+            -- ถ้าเข็มหมุนเข้าสู่โซนสีเขียว
+            if currentRotation >= MIN_ANGLE and currentRotation <= MAX_ANGLE then
                 local guiInset = GuiService:GetGuiInset()
-                local pourBtn = barGui:FindFirstChild("PourButton", true)
-                
-                local clickX = pourBtn and (pourBtn.AbsolutePosition.X + pourBtn.AbsoluteSize.X/2) or 200
-                local clickY = pourBtn and (pourBtn.AbsolutePosition.Y + pourBtn.AbsoluteSize.Y/2 + guiInset.Y) or 500
+                local clickX = pourBtn.AbsolutePosition.X + (pourBtn.AbsoluteSize.X / 2)
+                local clickY = pourBtn.AbsolutePosition.Y + (pourBtn.AbsoluteSize.Y / 2) + guiInset.Y
 
+                -- สั่งกดปุ่ม POUR ทันที
                 VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, true, game, 1)
                 task.wait(0.01)
                 VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, false, game, 1)
 
-                task.wait(0.3) -- Cooldown
+                VirtualInputManager:SendTouchEvent(1, Enum.UserInputState.Begin, Vector3.new(clickX, clickY, 0), game)
+                task.wait(0.01)
+                VirtualInputManager:SendTouchEvent(1, Enum.UserInputState.End, Vector3.new(clickX, clickY, 0), game)
+
+                task.wait(0.5) -- คูลดาวน์กันกดซ้ำ
             end
         end
     end)
