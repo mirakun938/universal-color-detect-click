@@ -1,4 +1,5 @@
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -9,7 +10,8 @@ end
 
 -- Variables
 local currentMode = "ALL" -- "ALL" หรือ "HELD"
-local currentTween = nil
+local followConnection = nil
+local currentItem = nil
 
 -- Create ScreenGui
 local ScreenGui = Instance.new("ScreenGui")
@@ -34,7 +36,7 @@ UICorner.Parent = MainFrame
 -- Title
 local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, 0, 0, 40)
-Title.Text = "TWEEN ITEM TO HEAD"
+Title.Text = "TWEEN FOLLOW ITEM TO HEAD"
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
 Title.TextSize = 13
 Title.Font = Enum.Font.SourceSansBold
@@ -85,22 +87,23 @@ local function createButton(text, bgColor, parent, size)
     return btn
 end
 
--- Stop Current Tween
-local function stopTween()
-    if currentTween then
-        currentTween:Cancel()
-        currentTween = nil
+-- Stop Item Following Logic
+local function stopFollow()
+    if followConnection then
+        followConnection:Disconnect()
+        followConnection = nil
     end
+    currentItem = nil
 end
 
--- Teleport Tween Item To Head Logic
-local function tweenItemToHead()
+-- Attach & Loop Follow Logic
+local function startItemFollow()
     local Character = LocalPlayer.Character
     if not Character then return end
     local Head = Character:FindFirstChild("Head")
     if not Head then return end
 
-    stopTween()
+    stopFollow() -- ยกเลิกการตามของชิ้นเก่าก่อน
 
     local targetPart = nil
 
@@ -125,19 +128,25 @@ local function tweenItemToHead()
         end
     end
 
-    -- 3. ย้ายไอเทมด้วย Tween (0.15 วินาที) ลอยอยู่บนหัว
+    -- 3. ลูปให้ของวาร์ปตามพิกัดหัวตลอดเวลา (Smooth Follow)
     if targetPart and targetPart:IsA("BasePart") then
-        local targetCFrame = Head.CFrame * CFrame.new(0, 2.5, 0)
-        local tweenInfo = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+        currentItem = targetPart
         
-        currentTween = TweenService:Create(targetPart, tweenInfo, {CFrame = targetCFrame})
-        currentTween:Play()
+        followConnection = RunService.RenderStepped:Connect(function()
+            if currentItem and currentItem.Parent and Character:FindFirstChild("Head") then
+                local targetCFrame = Head.CFrame * CFrame.new(0, 2.5, 0)
+                -- ใช้ CFrame.Lerp เพื่อความลื่นไหล ลอยตามศีรษะขณะเดิน
+                currentItem.CFrame = currentItem.CFrame:Lerp(targetCFrame, 0.4)
+            else
+                stopFollow()
+            end
+        end)
     end
 end
 
 -- UI Buttons
-local attachBtn = createButton("TWEEN ITEM TO HEAD", Color3.fromRGB(45, 90, 225), Scroll)
-local releaseBtn = createButton("STOP TWEEN / RELEASE", Color3.fromRGB(200, 60, 60), Scroll)
+local attachBtn = createButton("FOLLOW ITEM TO HEAD", Color3.fromRGB(45, 90, 225), Scroll)
+local releaseBtn = createButton("RELEASE ITEM", Color3.fromRGB(200, 60, 60), Scroll)
 local modeBtn = createButton("MODE: ALL (TARGET + HELD)", Color3.fromRGB(120, 60, 180), Scroll)
 local extToggleBtn = createButton("EXTERNAL BUTTONS: ON", Color3.fromRGB(180, 45, 50), Scroll)
 
@@ -153,11 +162,11 @@ ToggleMainBtn.Position = UDim2.new(0, 15, 0, 15)
 ToggleMainBtn.UICorner.CornerRadius = UDim.new(0, 10)
 
 -- Events
-attachBtn.MouseButton1Click:Connect(tweenItemToHead)
-quickAttach.MouseButton1Click:Connect(tweenItemToHead)
+attachBtn.MouseButton1Click:Connect(startItemFollow)
+quickAttach.MouseButton1Click:Connect(startItemFollow)
 
-releaseBtn.MouseButton1Click:Connect(stopTween)
-quickRelease.MouseButton1Click:Connect(stopTween)
+releaseBtn.MouseButton1Click:Connect(stopFollow)
+quickRelease.MouseButton1Click:Connect(stopFollow)
 
 modeBtn.MouseButton1Click:Connect(function()
     if currentMode == "ALL" then
