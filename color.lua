@@ -55,12 +55,17 @@ UIListLayout.Padding = UDim.new(0, 8)
 UIListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 UIListLayout.Parent = Scroll
 
--- Quick Buttons Frame (External Circle Button)
+-- Quick Buttons Frame (External Circle Buttons)
 local QuickFrame = Instance.new("Frame")
-QuickFrame.Size = UDim2.new(0, 60, 0, 50)
+QuickFrame.Size = UDim2.new(0, 110, 0, 50)
 QuickFrame.Position = UDim2.new(0.15, 0, 0.15, 0)
 QuickFrame.BackgroundTransparency = 1
 QuickFrame.Parent = ScreenGui
+
+local QuickLayout = Instance.new("UIListLayout")
+QuickLayout.FillDirection = Enum.FillDirection.Horizontal
+QuickLayout.Padding = UDim.new(0, 8)
+QuickLayout.Parent = QuickFrame
 
 -- Helper UI Function
 local function createButton(text, bgColor, parent, size)
@@ -121,9 +126,9 @@ local function attachItemToHead()
         end
     end
 
-    -- 3. ย้ายไอเทมมาอยู่บนหัวและติดกาว (Weld) ให้ย้ายตาม
+    -- 3. ย้ายไอเทมมาอยู่บนหัวและติดกาว (Weld)
     if targetPart and targetPart:IsA("BasePart") then
-        targetPart.CFrame = Head.CFrame * CFrame.new(0, 3, 0) -- ลอยสูงกว่าหัว 3 หน่วย
+        targetPart.CFrame = Head.CFrame * CFrame.new(0, 3, 0)
         
         local weld = Instance.new("WeldConstraint")
         weld.Part0 = Head
@@ -135,15 +140,17 @@ local function attachItemToHead()
     end
 end
 
--- UI Buttons
+-- Main UI Buttons
 local attachBtn = createButton("ATTACH ITEM TO HEAD", Color3.fromRGB(45, 90, 225), Scroll)
 local releaseBtn = createButton("RELEASE ITEM", Color3.fromRGB(200, 60, 60), Scroll)
 local modeBtn = createButton("MODE: ALL (TARGET + HELD)", Color3.fromRGB(120, 60, 180), Scroll)
-local extToggleBtn = createButton("EXTERNAL BUTTON: ON", Color3.fromRGB(180, 45, 50), Scroll)
+local extToggleBtn = createButton("EXTERNAL BUTTONS: ON", Color3.fromRGB(180, 45, 50), Scroll)
 
--- Quick External Button
+-- Quick External Buttons (วงกลมลอยด้านนอก)
 local quickAttach = createButton("HEAD", Color3.fromRGB(45, 90, 225), QuickFrame, UDim2.new(0, 45, 0, 45))
+local quickRelease = createButton("REL", Color3.fromRGB(200, 60, 60), QuickFrame, UDim2.new(0, 45, 0, 45))
 quickAttach.UICorner.CornerRadius = UDim.new(1, 0)
+quickRelease.UICorner.CornerRadius = UDim.new(1, 0)
 
 -- Toggle Main UI Button
 local ToggleMainBtn = createButton("UI", Color3.fromRGB(20, 20, 25), ScreenGui, UDim2.new(0, 40, 0, 40))
@@ -153,7 +160,9 @@ ToggleMainBtn.UICorner.CornerRadius = UDim.new(0, 10)
 -- Events
 attachBtn.MouseButton1Click:Connect(attachItemToHead)
 quickAttach.MouseButton1Click:Connect(attachItemToHead)
+
 releaseBtn.MouseButton1Click:Connect(releaseItem)
+quickRelease.MouseButton1Click:Connect(releaseItem) -- ปุ่มปล่อยรวดเร็วภายนอก
 
 modeBtn.MouseButton1Click:Connect(function()
     if currentMode == "ALL" then
@@ -171,7 +180,7 @@ local extVisible = true
 extToggleBtn.MouseButton1Click:Connect(function()
     extVisible = not extVisible
     QuickFrame.Visible = extVisible
-    extToggleBtn.Text = "EXTERNAL BUTTON: " .. (extVisible and "ON" or "OFF")
+    extToggleBtn.Text = "EXTERNAL BUTTONS: " .. (extVisible and "ON" or "OFF")
     extToggleBtn.BackgroundColor3 = extVisible and Color3.fromRGB(180, 45, 50) or Color3.fromRGB(80, 80, 85)
 end)
 
