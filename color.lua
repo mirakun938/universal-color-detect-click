@@ -2,22 +2,26 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 
-local Events = ReplicatedStorage:WaitForChild("events")
-local CastRod = Events:WaitForChild("CastRod")
-local ReelFish = Events:WaitForChild("ReelFish")
-local FishingMinigameRF = Events:WaitForChild("FishingMinigameRF")
+-- อ้างอิง Remote จาก ReplicatedStorage โดยตรงตามใน RemoteSpy
+local CastRod = ReplicatedStorage:WaitForChild("CastRod")
+local ReelFish = ReplicatedStorage:WaitForChild("ReelFish")
+local FishingRF = ReplicatedStorage:WaitForChild("FishingMinigameRF")
 
--- 1. Auto Win Minigame (Hook Callback เมื่อมินิเกมเริ่ม)
-if FishingMinigameRF then
-    FishingMinigameRF.OnClientInvoke = function(...)
-        -- ตอบกลับ Server ทันทีว่ามินิเกมผ่าน (Return true)
+-- 1. Hook / Direct Return สำหรับ Bypass มินิเกม
+local oldNamecall
+oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+    local method = getnamecallmethod()
+    
+    if self == FishingRF and (method == "InvokeServer" or method == "invokeServer") then
         return true
     end
-end
+    
+    return oldNamecall(self, ...)
+end)
 
--- 2. ลูป Auto Cast & Reel (เหวี่ยงเบ็ดและดึงสายอัตโนมัติ)
+-- 2. ลูปทำงาน Auto Cast & Reel
 task.spawn(function()
-    while task.wait(0.5) do
+    while task.wait(1) do
         pcall(function()
             local Character = LocalPlayer.Character
             if not Character or not Character:FindFirstChild("HumanoidRootPart") then return end
@@ -26,14 +30,15 @@ task.spawn(function()
             local Tool = Character:FindFirstChildOfClass("Tool")
             if Tool then
                 -- คำนวณพิกัดด้านหน้าตัวละครสำหรับการเหวี่ยงเบ็ด (Vector3)
-                local TargetPosition = Character.HumanoidRootPart.Position + (Character.HumanoidRootPart.CFrame.LookVector * 15)
+                local hrp = Character.HumanoidRootPart
+                local targetPos = hrp.Position + (hrp.CFrame.LookVector * 20)
                 
-                -- สั่ง CastRod พร้อมพิกัด Vector3 (ตรงตาม RemoteSpy)
-                CastRod:FireServer(TargetPosition)
+                -- สั่งเหวี่ยงเบ็ดตามโครงสร้าง Vector3 ใน RemoteSpy
+                CastRod:FireServer(targetPos)
                 
-                task.wait(0.2)
+                task.wait(0.3)
                 
-                -- สั่ง ReelFish (ดึงสาย)
+                -- สั่งดึงสาย
                 ReelFish:FireServer()
             end
         end)
