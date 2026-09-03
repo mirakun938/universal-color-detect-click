@@ -6,14 +6,10 @@ if PlayerGui:FindFirstChild("ItemTeleporterUI") then
     PlayerGui.ItemTeleporterUI:Destroy()
 end
 
-local savedPositions = {
-    TP1 = nil,
-    TP2 = nil,
-    TP3 = nil
-}
-
--- Settings Variable
+-- Variables
 local currentMode = "ALL" -- "ALL" หรือ "HELD"
+local headWeld = nil
+local attachedObject = nil
 
 -- Create ScreenGui
 local ScreenGui = Instance.new("ScreenGui")
@@ -23,8 +19,8 @@ ScreenGui.Parent = PlayerGui
 
 -- Main Frame
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 260, 0, 460)
-MainFrame.Position = UDim2.new(0.5, -130, 0.5, -230)
+MainFrame.Size = UDim2.new(0, 260, 0, 360)
+MainFrame.Position = UDim2.new(0.5, -130, 0.5, -180)
 MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -38,7 +34,7 @@ UICorner.Parent = MainFrame
 -- Title
 local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, 0, 0, 40)
-Title.Text = "ITEM TELEPORT COORDINATES"
+Title.Text = "ITEM HEAD ATTACHER"
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
 Title.TextSize = 13
 Title.Font = Enum.Font.SourceSansBold
@@ -51,7 +47,7 @@ Scroll.Size = UDim2.new(1, -20, 1, -50)
 Scroll.Position = UDim2.new(0, 10, 0, 40)
 Scroll.BackgroundTransparency = 1
 Scroll.ScrollBarThickness = 4
-Scroll.CanvasSize = UDim2.new(0, 0, 0, 430)
+Scroll.CanvasSize = UDim2.new(0, 0, 0, 320)
 Scroll.Parent = MainFrame
 
 local UIListLayout = Instance.new("UIListLayout")
@@ -59,26 +55,21 @@ UIListLayout.Padding = UDim.new(0, 8)
 UIListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 UIListLayout.Parent = Scroll
 
--- Quick Buttons Frame (External Circle Buttons)
+-- Quick Buttons Frame (External Circle Button)
 local QuickFrame = Instance.new("Frame")
-QuickFrame.Size = UDim2.new(0, 150, 0, 50)
+QuickFrame.Size = UDim2.new(0, 60, 0, 50)
 QuickFrame.Position = UDim2.new(0.15, 0, 0.15, 0)
 QuickFrame.BackgroundTransparency = 1
 QuickFrame.Parent = ScreenGui
 
-local QuickLayout = Instance.new("UIListLayout")
-QuickLayout.FillDirection = Enum.FillDirection.Horizontal
-QuickLayout.Padding = UDim.new(0, 8)
-QuickLayout.Parent = QuickFrame
-
--- Helper UI Functions
+-- Helper UI Function
 local function createButton(text, bgColor, parent, size)
     local btn = Instance.new("TextButton")
     btn.Size = size or UDim2.new(0.95, 0, 0, 42)
     btn.Text = text
     btn.TextColor3 = Color3.fromRGB(255, 255, 255)
     btn.Font = Enum.Font.SourceSansBold
-    btn.TextSize = 15
+    btn.TextSize = 14
     btn.BackgroundColor3 = bgColor
     btn.BorderSizePixel = 0
     btn.Parent = parent
@@ -89,94 +80,81 @@ local function createButton(text, bgColor, parent, size)
     return btn
 end
 
--- Advanced Teleport Logic
-local function executeTeleport(cframe)
-    if not cframe then return end
+-- Release Attached Item Logic
+local function releaseItem()
+    if headWeld then
+        headWeld:Destroy()
+        headWeld = nil
+    end
+    attachedObject = nil
+end
+
+-- Attach Item To Head Logic
+local function attachItemToHead()
     local Character = LocalPlayer.Character
     if not Character then return end
+    local Head = Character:FindFirstChild("Head")
+    if not Head then return end
 
-    -- 1. เช็คของในมือก่อนเสมอ (Held Item)
+    releaseItem() -- ปลดของเก่าออกก่อน
+
+    local targetPart = nil
+
+    -- 1. เช็คของในมือก่อน (Held Item)
     local HeldTool = Character:FindFirstChildOfClass("Tool")
     if HeldTool then
-        local Handle = HeldTool:FindFirstChild("Handle") or HeldTool:FindFirstChildWhichIsA("BasePart")
-        if Handle then
-            Handle.CFrame = cframe
-        else
-            HeldTool:PivotTo(cframe)
-        end
-        return
+        targetPart = HeldTool:FindFirstChild("Handle") or HeldTool:FindFirstChildWhichIsA("BasePart")
     end
 
-    -- 2. ถ้าอยู่โหมด ALL และไม่ได้ถือของ ให้เช็คของกลางจอ (Raycast)
-    if currentMode == "ALL" then
+    -- 2. ถ้าอยู่โหมด ALL และไม่ได้ถือของ ให้เช็คของกลางจอ
+    if not targetPart and currentMode == "ALL" then
         local Camera = workspace.CurrentCamera
         local Ray = Camera:ViewportPointToRay(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
         local RaycastResult = workspace:Raycast(Ray.Origin, Ray.Direction * 25)
 
         if RaycastResult and RaycastResult.Instance then
             local hitObj = RaycastResult.Instance
-            local targetModel = hitObj:FindFirstAncestorOfClass("Model") or hitObj
-            
-            if targetModel:IsA("BasePart") then
-                targetModel.CFrame = cframe
-            elseif targetModel:IsA("Model") then
-                targetModel:PivotTo(cframe)
+            targetPart = hitObj:IsA("BasePart") and hitObj or hitObj:FindFirstAncestorOfClass("Model")
+            if targetPart and targetPart:IsA("Model") then
+                targetPart = targetPart.PrimaryPart or targetPart:FindFirstChildWhichIsA("BasePart")
             end
         end
     end
+
+    -- 3. ย้ายไอเทมมาอยู่บนหัวและติดกาว (Weld) ให้ย้ายตาม
+    if targetPart and targetPart:IsA("BasePart") then
+        targetPart.CFrame = Head.CFrame * CFrame.new(0, 3, 0) -- ลอยสูงกว่าหัว 3 หน่วย
+        
+        local weld = Instance.new("WeldConstraint")
+        weld.Part0 = Head
+        weld.Part1 = targetPart
+        weld.Parent = targetPart
+
+        headWeld = weld
+        attachedObject = targetPart
+    end
 end
 
--- Create Main UI Buttons
-local tp1 = createButton("TP 1", Color3.fromRGB(45, 90, 225), Scroll)
-local tp2 = createButton("TP 2", Color3.fromRGB(45, 90, 225), Scroll)
-local tp3 = createButton("TP 3", Color3.fromRGB(45, 90, 225), Scroll)
-
-local swp1 = createButton("SWP 1 (Save Pos)", Color3.fromRGB(40, 160, 90), Scroll)
-local swp2 = createButton("SWP 2 (Save Pos)", Color3.fromRGB(40, 160, 90), Scroll)
-local swp3 = createButton("SWP 3 (Save Pos)", Color3.fromRGB(40, 160, 90), Scroll)
-
--- ปุ่มสลับโหมด
+-- UI Buttons
+local attachBtn = createButton("ATTACH ITEM TO HEAD", Color3.fromRGB(45, 90, 225), Scroll)
+local releaseBtn = createButton("RELEASE ITEM", Color3.fromRGB(200, 60, 60), Scroll)
 local modeBtn = createButton("MODE: ALL (TARGET + HELD)", Color3.fromRGB(120, 60, 180), Scroll)
-local extToggleBtn = createButton("EXTERNAL BUTTONS: ON", Color3.fromRGB(180, 45, 50), Scroll)
+local extToggleBtn = createButton("EXTERNAL BUTTON: ON", Color3.fromRGB(180, 45, 50), Scroll)
 
--- Create Quick Circle Buttons
-local q1 = createButton("TP1", Color3.fromRGB(45, 90, 225), QuickFrame, UDim2.new(0, 42, 0, 42))
-local q2 = createButton("TP2", Color3.fromRGB(45, 90, 225), QuickFrame, UDim2.new(0, 42, 0, 42))
-local q3 = createButton("TP3", Color3.fromRGB(45, 90, 225), QuickFrame, UDim2.new(0, 42, 0, 42))
-q1.UICorner.CornerRadius = UDim.new(1, 0)
-q2.UICorner.CornerRadius = UDim.new(1, 0)
-q3.UICorner.CornerRadius = UDim.new(1, 0)
+-- Quick External Button
+local quickAttach = createButton("HEAD", Color3.fromRGB(45, 90, 225), QuickFrame, UDim2.new(0, 45, 0, 45))
+quickAttach.UICorner.CornerRadius = UDim.new(1, 0)
 
 -- Toggle Main UI Button
 local ToggleMainBtn = createButton("UI", Color3.fromRGB(20, 20, 25), ScreenGui, UDim2.new(0, 40, 0, 40))
 ToggleMainBtn.Position = UDim2.new(0, 15, 0, 15)
 ToggleMainBtn.UICorner.CornerRadius = UDim.new(0, 10)
 
--- Button Connections
-local function savePos(key, btn)
-    local Character = LocalPlayer.Character
-    if Character and Character:FindFirstChild("HumanoidRootPart") then
-        savedPositions[key] = Character.HumanoidRootPart.CFrame
-        local oldText = btn.Text
-        btn.Text = key .. " Saved!"
-        task.wait(0.8)
-        btn.Text = oldText
-    end
-end
+-- Events
+attachBtn.MouseButton1Click:Connect(attachItemToHead)
+quickAttach.MouseButton1Click:Connect(attachItemToHead)
+releaseBtn.MouseButton1Click:Connect(releaseItem)
 
-swp1.MouseButton1Click:Connect(function() savePos("TP1", swp1) end)
-swp2.MouseButton1Click:Connect(function() savePos("TP2", swp2) end)
-swp3.MouseButton1Click:Connect(function() savePos("TP3", swp3) end)
-
-tp1.MouseButton1Click:Connect(function() executeTeleport(savedPositions.TP1) end)
-tp2.MouseButton1Click:Connect(function() executeTeleport(savedPositions.TP2) end)
-tp3.MouseButton1Click:Connect(function() executeTeleport(savedPositions.TP3) end)
-
-q1.MouseButton1Click:Connect(function() executeTeleport(savedPositions.TP1) end)
-q2.MouseButton1Click:Connect(function() executeTeleport(savedPositions.TP2) end)
-q3.MouseButton1Click:Connect(function() executeTeleport(savedPositions.TP3) end)
-
--- Toggle Mode Logic
 modeBtn.MouseButton1Click:Connect(function()
     if currentMode == "ALL" then
         currentMode = "HELD"
@@ -189,16 +167,14 @@ modeBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- Toggle External Quick Buttons
 local extVisible = true
 extToggleBtn.MouseButton1Click:Connect(function()
     extVisible = not extVisible
     QuickFrame.Visible = extVisible
-    extToggleBtn.Text = "EXTERNAL BUTTONS: " .. (extVisible and "ON" or "OFF")
+    extToggleBtn.Text = "EXTERNAL BUTTON: " .. (extVisible and "ON" or "OFF")
     extToggleBtn.BackgroundColor3 = extVisible and Color3.fromRGB(180, 45, 50) or Color3.fromRGB(80, 80, 85)
 end)
 
--- Toggle Main UI Window
 ToggleMainBtn.MouseButton1Click:Connect(function()
     MainFrame.Visible = not MainFrame.Visible
 end)
