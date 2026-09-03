@@ -1,38 +1,56 @@
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 
--- อ้างอิง Remote จาก ReplicatedStorage โดยตรงตาม RemoteSpy
-local CastRod = ReplicatedStorage:WaitForChild("CastRod")
-local ReelFish = ReplicatedStorage:WaitForChild("ReelFish")
-local FishingRF = ReplicatedStorage:WaitForChild("FishingMinigameRF")
-
--- 1. ดักจับและทำ Auto-Win Minigame ทันทีที่ Server ส่งสัญญาณมินิเกมมา
-FishingRF.OnClientInvoke = function(data)
-    -- เมื่อ Server เรียกมินิเกม สคริปต์จะตอบกลับค่า true เพื่อข้ามการกด Left/Right/Shake และชนะทันที
-    return true
+-- ฟังก์ชันค้นหา Remote แบบเดียวกับที่ RemoteSpy ในคลิปวิดีโอของคุณใช้
+local function GetEvent(name)
+    for _, obj in pairs(game:GetDescendants()) do
+        if obj.Name == name and (obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction")) then
+            return obj
+        end
+    end
+    -- กรณี Remote ถูกซ่อนใน Nil
+    if getnilinstances then
+        for _, obj in pairs(getnilinstances()) do
+            if obj.Name == name and (obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction")) then
+                return obj
+            end
+        end
+    end
+    return nil
 end
 
--- 2. ลูปทำงาน Auto Cast & Reel In อัตโนมัติ
+-- ดึง Remote ผ่านฟังก์ชันค้นหา
+local CastRod = GetEvent("CastRod")
+local ReelFish = GetEvent("ReelFish")
+local FishingRF = GetEvent("FishingMinigameRF")
+
+-- 1. Bypass มินิเกมเมื่อ Server เรียกใช้งาน
+if FishingRF then
+    FishingRF.OnClientInvoke = function(...)
+        return true
+    end
+end
+
+-- 2. ลูปเหวี่ยงเบ็ดและดึงสายอัตโนมัติ
 task.spawn(function()
-    while task.wait(1.5) do
+    while task.wait(1.2) do
         pcall(function()
             local Character = LocalPlayer.Character
             if not Character or not Character:FindFirstChild("HumanoidRootPart") then return end
             
             -- ตรวจสอบว่าถือเบ็ดอยู่หรือไม่
             local Tool = Character:FindFirstChildOfClass("Tool")
-            if Tool then
+            if Tool and CastRod and ReelFish then
                 local hrp = Character.HumanoidRootPart
                 -- คำนวณพิกัดด้านหน้าตัวละครลงน้ำ (Vector3)
                 local targetPos = hrp.Position + (hrp.CFrame.LookVector * 15) - Vector3.new(0, 5, 0)
                 
-                -- ขั้นตอนที่ 1: เหวี่ยงเบ็ดลงน้ำ
+                -- เหวี่ยงเบ็ดพร้อมส่ง Vector3
                 CastRod:FireServer(targetPos)
                 
-                task.wait(1)
+                task.wait(0.5)
                 
-                -- ขั้นตอนที่ 2: กด Reel In (ดึงสายเมื่อปลาติดเบ็ด)
+                -- ดึงสาย
                 ReelFish:FireServer()
             end
         end)
