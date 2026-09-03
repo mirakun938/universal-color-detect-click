@@ -1,6 +1,5 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -9,9 +8,11 @@ if PlayerGui:FindFirstChild("ItemTeleporterUI") then
 end
 
 -- Variables
-local currentMode = "ALL" -- "ALL" หรือ "HELD"
+local currentMode = "ALL"
 local followConnection = nil
 local currentItem = nil
+local originalAnchored = false
+local originalCanCollide = true
 
 -- Create ScreenGui
 local ScreenGui = Instance.new("ScreenGui")
@@ -36,9 +37,9 @@ UICorner.Parent = MainFrame
 -- Title
 local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, 0, 0, 40)
-Title.Text = "TWEEN FOLLOW ITEM TO HEAD"
+Title.Text = "STUCK HEAD FOLLOW (PHYSICS FIX)"
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-Title.TextSize = 13
+Title.TextSize = 12
 Title.Font = Enum.Font.SourceSansBold
 Title.BackgroundTransparency = 1
 Title.Parent = MainFrame
@@ -87,23 +88,30 @@ local function createButton(text, bgColor, parent, size)
     return btn
 end
 
--- Stop Item Following Logic
+-- Stop Following & Restore Physics
 local function stopFollow()
     if followConnection then
         followConnection:Disconnect()
         followConnection = nil
     end
+    
+    -- คืนค่า Physics เดิมให้ไอเทม เพื่อนำไปใช้ประกอบอาหารต่อได้
+    if currentItem and currentItem:IsA("BasePart") then
+        currentItem.Anchored = originalAnchored
+        currentItem.CanCollide = originalCanCollide
+    end
+    
     currentItem = nil
 end
 
--- Attach & Loop Follow Logic
+-- Attach & Force Loop Logic
 local function startItemFollow()
     local Character = LocalPlayer.Character
     if not Character then return end
     local Head = Character:FindFirstChild("Head")
     if not Head then return end
 
-    stopFollow() -- ยกเลิกการตามของชิ้นเก่าก่อน
+    stopFollow()
 
     local targetPart = nil
 
@@ -113,7 +121,7 @@ local function startItemFollow()
         targetPart = HeldTool:FindFirstChild("Handle") or HeldTool:FindFirstChildWhichIsA("BasePart")
     end
 
-    -- 2. ถ้าอยู่โหมด ALL และไม่ได้ถือของ ให้เช็คของกลางจอ
+    -- 2. เช็คของกลางจอ (Mode ALL)
     if not targetPart and currentMode == "ALL" then
         local Camera = workspace.CurrentCamera
         local Ray = Camera:ViewportPointToRay(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
@@ -128,15 +136,22 @@ local function startItemFollow()
         end
     end
 
-    -- 3. ลูปให้ของวาร์ปตามพิกัดหัวตลอดเวลา (Smooth Follow)
+    -- 3. ล็อกพิกัด และปิด Physics ไม่ให้เกมดึงกลับ
     if targetPart and targetPart:IsA("BasePart") then
         currentItem = targetPart
         
-        followConnection = RunService.RenderStepped:Connect(function()
+        -- จำค่าเดิมไว้
+        originalAnchored = targetPart.Anchored
+        originalCanCollide = targetPart.CanCollide
+        
+        -- ปรับตั้งค่ากันเกมดึงหลุด
+        targetPart.Anchored = true
+        targetPart.CanCollide = false
+
+        -- บังคับอัปเดตตำแหน่งตามหัวทุกเฟรม
+        followConnection = RunService.Heartbeat:Connect(function()
             if currentItem and currentItem.Parent and Character:FindFirstChild("Head") then
-                local targetCFrame = Head.CFrame * CFrame.new(0, 2.5, 0)
-                -- ใช้ CFrame.Lerp เพื่อความลื่นไหล ลอยตามศีรษะขณะเดิน
-                currentItem.CFrame = currentItem.CFrame:Lerp(targetCFrame, 0.4)
+                currentItem.CFrame = Head.CFrame * CFrame.new(0, 2.8, 0)
             else
                 stopFollow()
             end
@@ -145,7 +160,7 @@ local function startItemFollow()
 end
 
 -- UI Buttons
-local attachBtn = createButton("FOLLOW ITEM TO HEAD", Color3.fromRGB(45, 90, 225), Scroll)
+local attachBtn = createButton("FORCE HEAD FOLLOW", Color3.fromRGB(45, 90, 225), Scroll)
 local releaseBtn = createButton("RELEASE ITEM", Color3.fromRGB(200, 60, 60), Scroll)
 local modeBtn = createButton("MODE: ALL (TARGET + HELD)", Color3.fromRGB(120, 60, 180), Scroll)
 local extToggleBtn = createButton("EXTERNAL BUTTONS: ON", Color3.fromRGB(180, 45, 50), Scroll)
