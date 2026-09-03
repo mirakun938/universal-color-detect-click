@@ -12,6 +12,9 @@ local savedPositions = {
     TP3 = nil
 }
 
+-- Settings Variable
+local currentMode = "ALL" -- "ALL" หรือ "HELD"
+
 -- Create ScreenGui
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "ItemTeleporterUI"
@@ -20,8 +23,8 @@ ScreenGui.Parent = PlayerGui
 
 -- Main Frame
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 260, 0, 420)
-MainFrame.Position = UDim2.new(0.5, -130, 0.5, -210)
+MainFrame.Size = UDim2.new(0, 260, 0, 460)
+MainFrame.Position = UDim2.new(0.5, -130, 0.5, -230)
 MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -35,7 +38,7 @@ UICorner.Parent = MainFrame
 -- Title
 local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, 0, 0, 40)
-Title.Text = "HEAVY HELD-ITEM TELEPORT"
+Title.Text = "ITEM TELEPORT COORDINATES"
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
 Title.TextSize = 13
 Title.Font = Enum.Font.SourceSansBold
@@ -48,7 +51,7 @@ Scroll.Size = UDim2.new(1, -20, 1, -50)
 Scroll.Position = UDim2.new(0, 10, 0, 40)
 Scroll.BackgroundTransparency = 1
 Scroll.ScrollBarThickness = 4
-Scroll.CanvasSize = UDim2.new(0, 0, 0, 380)
+Scroll.CanvasSize = UDim2.new(0, 0, 0, 430)
 Scroll.Parent = MainFrame
 
 local UIListLayout = Instance.new("UIListLayout")
@@ -86,21 +89,39 @@ local function createButton(text, bgColor, parent, size)
     return btn
 end
 
--- Teleport Logic (ทำงานเฉพาะไอเทมที่ถืออยู่ในมือเท่านั้น)
-local function teleportHeldItemTo(cframe)
+-- Advanced Teleport Logic
+local function executeTeleport(cframe)
     if not cframe then return end
     local Character = LocalPlayer.Character
     if not Character then return end
 
-    -- ค้นหาเฉพาะไอเทม (Tool) ที่ถืออยู่ในตัวละคร
+    -- 1. เช็คของในมือก่อนเสมอ (Held Item)
     local HeldTool = Character:FindFirstChildOfClass("Tool")
-    
     if HeldTool then
         local Handle = HeldTool:FindFirstChild("Handle") or HeldTool:FindFirstChildWhichIsA("BasePart")
         if Handle then
             Handle.CFrame = cframe
         else
             HeldTool:PivotTo(cframe)
+        end
+        return
+    end
+
+    -- 2. ถ้าอยู่โหมด ALL และไม่ได้ถือของ ให้เช็คของกลางจอ (Raycast)
+    if currentMode == "ALL" then
+        local Camera = workspace.CurrentCamera
+        local Ray = Camera:ViewportPointToRay(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+        local RaycastResult = workspace:Raycast(Ray.Origin, Ray.Direction * 25)
+
+        if RaycastResult and RaycastResult.Instance then
+            local hitObj = RaycastResult.Instance
+            local targetModel = hitObj:FindFirstAncestorOfClass("Model") or hitObj
+            
+            if targetModel:IsA("BasePart") then
+                targetModel.CFrame = cframe
+            elseif targetModel:IsA("Model") then
+                targetModel:PivotTo(cframe)
+            end
         end
     end
 end
@@ -114,6 +135,8 @@ local swp1 = createButton("SWP 1 (Save Pos)", Color3.fromRGB(40, 160, 90), Scrol
 local swp2 = createButton("SWP 2 (Save Pos)", Color3.fromRGB(40, 160, 90), Scroll)
 local swp3 = createButton("SWP 3 (Save Pos)", Color3.fromRGB(40, 160, 90), Scroll)
 
+-- ปุ่มสลับโหมด
+local modeBtn = createButton("MODE: ALL (TARGET + HELD)", Color3.fromRGB(120, 60, 180), Scroll)
 local extToggleBtn = createButton("EXTERNAL BUTTONS: ON", Color3.fromRGB(180, 45, 50), Scroll)
 
 -- Create Quick Circle Buttons
@@ -124,7 +147,7 @@ q1.UICorner.CornerRadius = UDim.new(1, 0)
 q2.UICorner.CornerRadius = UDim.new(1, 0)
 q3.UICorner.CornerRadius = UDim.new(1, 0)
 
--- Toggle Main UI Button (Top-Left Logo Button)
+-- Toggle Main UI Button
 local ToggleMainBtn = createButton("UI", Color3.fromRGB(20, 20, 25), ScreenGui, UDim2.new(0, 40, 0, 40))
 ToggleMainBtn.Position = UDim2.new(0, 15, 0, 15)
 ToggleMainBtn.UICorner.CornerRadius = UDim.new(0, 10)
@@ -145,14 +168,26 @@ swp1.MouseButton1Click:Connect(function() savePos("TP1", swp1) end)
 swp2.MouseButton1Click:Connect(function() savePos("TP2", swp2) end)
 swp3.MouseButton1Click:Connect(function() savePos("TP3", swp3) end)
 
--- ปุ่มวาร์ป (ดึงเฉพาะของในมือไปพิกัด)
-tp1.MouseButton1Click:Connect(function() teleportHeldItemTo(savedPositions.TP1) end)
-tp2.MouseButton1Click:Connect(function() teleportHeldItemTo(savedPositions.TP2) end)
-tp3.MouseButton1Click:Connect(function() teleportHeldItemTo(savedPositions.TP3) end)
+tp1.MouseButton1Click:Connect(function() executeTeleport(savedPositions.TP1) end)
+tp2.MouseButton1Click:Connect(function() executeTeleport(savedPositions.TP2) end)
+tp3.MouseButton1Click:Connect(function() executeTeleport(savedPositions.TP3) end)
 
-q1.MouseButton1Click:Connect(function() teleportHeldItemTo(savedPositions.TP1) end)
-q2.MouseButton1Click:Connect(function() teleportHeldItemTo(savedPositions.TP2) end)
-q3.MouseButton1Click:Connect(function() teleportHeldItemTo(savedPositions.TP3) end)
+q1.MouseButton1Click:Connect(function() executeTeleport(savedPositions.TP1) end)
+q2.MouseButton1Click:Connect(function() executeTeleport(savedPositions.TP2) end)
+q3.MouseButton1Click:Connect(function() executeTeleport(savedPositions.TP3) end)
+
+-- Toggle Mode Logic
+modeBtn.MouseButton1Click:Connect(function()
+    if currentMode == "ALL" then
+        currentMode = "HELD"
+        modeBtn.Text = "MODE: HELD ITEM ONLY"
+        modeBtn.BackgroundColor3 = Color3.fromRGB(200, 120, 20)
+    else
+        currentMode = "ALL"
+        modeBtn.Text = "MODE: ALL (TARGET + HELD)"
+        modeBtn.BackgroundColor3 = Color3.fromRGB(120, 60, 180)
+    end
+end)
 
 -- Toggle External Quick Buttons
 local extVisible = true
