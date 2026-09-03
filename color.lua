@@ -8,11 +8,12 @@ if PlayerGui:FindFirstChild("ItemTeleporterUI") then
 end
 
 -- Variables
-local currentMode = "ALL"
-local followConnection = nil
-local currentItem = nil
-local originalAnchored = false
-local originalCanCollide = true
+local currentMode = "ALL" -- "ALL" หรือ "HELD"
+local tetherConnection = nil
+local activeBeam = nil
+local activeAttachment0 = nil
+local activeAttachment1 = nil
+local currentTargetPart = nil
 
 -- Create ScreenGui
 local ScreenGui = Instance.new("ScreenGui")
@@ -37,9 +38,9 @@ UICorner.Parent = MainFrame
 -- Title
 local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, 0, 0, 40)
-Title.Text = "STUCK HEAD FOLLOW (PHYSICS FIX)"
+Title.Text = "ITEM LINE TETHER & MAGNET"
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-Title.TextSize = 12
+Title.TextSize = 13
 Title.Font = Enum.Font.SourceSansBold
 Title.BackgroundTransparency = 1
 Title.Parent = MainFrame
@@ -88,30 +89,26 @@ local function createButton(text, bgColor, parent, size)
     return btn
 end
 
--- Stop Following & Restore Physics
-local function stopFollow()
-    if followConnection then
-        followConnection:Disconnect()
-        followConnection = nil
+-- Clear Tether / Magnet Line
+local function clearTether()
+    if tetherConnection then
+        tetherConnection:Disconnect()
+        tetherConnection = nil
     end
-    
-    -- คืนค่า Physics เดิมให้ไอเทม เพื่อนำไปใช้ประกอบอาหารต่อได้
-    if currentItem and currentItem:IsA("BasePart") then
-        currentItem.Anchored = originalAnchored
-        currentItem.CanCollide = originalCanCollide
-    end
-    
-    currentItem = nil
+    if activeBeam then activeBeam:Destroy() activeBeam = nil end
+    if activeAttachment0 then activeAttachment0:Destroy() activeAttachment0 = nil end
+    if activeAttachment1 then activeAttachment1:Destroy() activeAttachment1 = nil end
+    currentTargetPart = nil
 end
 
--- Attach & Force Loop Logic
-local function startItemFollow()
+-- Start Tether / Magnet Pull
+local function startTether()
     local Character = LocalPlayer.Character
     if not Character then return end
-    local Head = Character:FindFirstChild("Head")
-    if not Head then return end
+    local HumanoidRootPart = Character:FindFirstChild("HumanoidRootPart")
+    if not HumanoidRootPart then return end
 
-    stopFollow()
+    clearTether()
 
     local targetPart = nil
 
@@ -125,7 +122,7 @@ local function startItemFollow()
     if not targetPart and currentMode == "ALL" then
         local Camera = workspace.CurrentCamera
         local Ray = Camera:ViewportPointToRay(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
-        local RaycastResult = workspace:Raycast(Ray.Origin, Ray.Direction * 25)
+        local RaycastResult = workspace:Raycast(Ray.Origin, Ray.Direction * 30)
 
         if RaycastResult and RaycastResult.Instance then
             local hitObj = RaycastResult.Instance
@@ -136,37 +133,43 @@ local function startItemFollow()
         end
     end
 
-    -- 3. ล็อกพิกัด และปิด Physics ไม่ให้เกมดึงกลับ
     if targetPart and targetPart:IsA("BasePart") then
-        currentItem = targetPart
-        
-        -- จำค่าเดิมไว้
-        originalAnchored = targetPart.Anchored
-        originalCanCollide = targetPart.CanCollide
-        
-        -- ปรับตั้งค่ากันเกมดึงหลุด
-        targetPart.Anchored = true
-        targetPart.CanCollide = false
+        currentTargetPart = targetPart
 
-        -- บังคับอัปเดตตำแหน่งตามหัวทุกเฟรม
-        followConnection = RunService.Heartbeat:Connect(function()
-            if currentItem and currentItem.Parent and Character:FindFirstChild("Head") then
-                currentItem.CFrame = Head.CFrame * CFrame.new(0, 2.8, 0)
+        -- สร้างจุดยึด Attachment
+        activeAttachment0 = Instance.new("Attachment", HumanoidRootPart)
+        activeAttachment1 = Instance.new("Attachment", targetPart)
+
+        -- สร้างเส้นโยง Beam
+        activeBeam = Instance.new("Beam")
+        activeBeam.Attachment0 = activeAttachment0
+        activeBeam.Attachment1 = activeAttachment1
+        activeBeam.Width0 = 0.2
+        activeBeam.Width1 = 0.2
+        activeBeam.Color = ColorSequence.new(Color3.fromRGB(0, 200, 255))
+        activeBeam.FaceCamera = true
+        activeBeam.Parent = HumanoidRootPart
+
+        -- ลูปใช้ฟิสิกส์แม่เหล็กดูดไอเทมเข้ามาหาตัวละคร
+        tetherConnection = RunService.Heartbeat:Connect(function()
+            if currentTargetPart and currentTargetPart.Parent and HumanoidRootPart then
+                local goalPosition = HumanoidRootPart.CFrame * CFrame.new(0, 1, -3) -- ให้ของลอยอยู่หน้าเราเล็กน้อย
+                currentTargetPart.CFrame = currentTargetPart.CFrame:Lerp(goalPosition, 0.25)
             else
-                stopFollow()
+                clearTether()
             end
         end)
     end
 end
 
 -- UI Buttons
-local attachBtn = createButton("FORCE HEAD FOLLOW", Color3.fromRGB(45, 90, 225), Scroll)
-local releaseBtn = createButton("RELEASE ITEM", Color3.fromRGB(200, 60, 60), Scroll)
+local attachBtn = createButton("TETHER / MAGNET ITEM", Color3.fromRGB(45, 90, 225), Scroll)
+local releaseBtn = createButton("RELEASE TETHER", Color3.fromRGB(200, 60, 60), Scroll)
 local modeBtn = createButton("MODE: ALL (TARGET + HELD)", Color3.fromRGB(120, 60, 180), Scroll)
 local extToggleBtn = createButton("EXTERNAL BUTTONS: ON", Color3.fromRGB(180, 45, 50), Scroll)
 
 -- Quick External Buttons
-local quickAttach = createButton("HEAD", Color3.fromRGB(45, 90, 225), QuickFrame, UDim2.new(0, 45, 0, 45))
+local quickAttach = createButton("MAG", Color3.fromRGB(45, 90, 225), QuickFrame, UDim2.new(0, 45, 0, 45))
 local quickRelease = createButton("REL", Color3.fromRGB(200, 60, 60), QuickFrame, UDim2.new(0, 45, 0, 45))
 quickAttach.UICorner.CornerRadius = UDim.new(1, 0)
 quickRelease.UICorner.CornerRadius = UDim.new(1, 0)
@@ -177,11 +180,11 @@ ToggleMainBtn.Position = UDim2.new(0, 15, 0, 15)
 ToggleMainBtn.UICorner.CornerRadius = UDim.new(0, 10)
 
 -- Events
-attachBtn.MouseButton1Click:Connect(startItemFollow)
-quickAttach.MouseButton1Click:Connect(startItemFollow)
+attachBtn.MouseButton1Click:Connect(startTether)
+quickAttach.MouseButton1Click:Connect(startTether)
 
-releaseBtn.MouseButton1Click:Connect(stopFollow)
-quickRelease.MouseButton1Click:Connect(stopFollow)
+releaseBtn.MouseButton1Click:Connect(clearTether)
+quickRelease.MouseButton1Click:Connect(clearTether)
 
 modeBtn.MouseButton1Click:Connect(function()
     if currentMode == "ALL" then
