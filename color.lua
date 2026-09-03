@@ -35,7 +35,7 @@ UICorner.Parent = MainFrame
 -- Title
 local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, 0, 0, 40)
-Title.Text = "ITEM TELEPORT COORDINATES"
+Title.Text = "HEAVY HELD-ITEM TELEPORT"
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
 Title.TextSize = 13
 Title.Font = Enum.Font.SourceSansBold
@@ -86,37 +86,21 @@ local function createButton(text, bgColor, parent, size)
     return btn
 end
 
--- Teleport Action Logic
-local function teleportItemTo(cframe)
+-- Teleport Logic (ทำงานเฉพาะไอเทมที่ถืออยู่ในมือเท่านั้น)
+local function teleportHeldItemTo(cframe)
     if not cframe then return end
     local Character = LocalPlayer.Character
     if not Character then return end
 
-    -- 1. Check Held Tool
-    local Tool = Character:FindFirstChildOfClass("Tool")
-    if Tool then
-        local Handle = Tool:FindFirstChild("Handle") or Tool:FindFirstChildWhichIsA("BasePart")
+    -- ค้นหาเฉพาะไอเทม (Tool) ที่ถืออยู่ในตัวละคร
+    local HeldTool = Character:FindFirstChildOfClass("Tool")
+    
+    if HeldTool then
+        local Handle = HeldTool:FindFirstChild("Handle") or HeldTool:FindFirstChildWhichIsA("BasePart")
         if Handle then
             Handle.CFrame = cframe
         else
-            Tool:PivotTo(cframe)
-        end
-        return
-    end
-
-    -- 2. Raycast Target Item in Screen Center
-    local Camera = workspace.CurrentCamera
-    local Ray = Camera:ViewportPointToRay(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
-    local RaycastResult = workspace:Raycast(Ray.Origin, Ray.Direction * 25)
-
-    if RaycastResult and RaycastResult.Instance then
-        local hitObj = RaycastResult.Instance
-        local targetModel = hitObj:FindFirstAncestorOfClass("Model") or hitObj
-        
-        if targetModel:IsA("BasePart") then
-            targetModel.CFrame = cframe
-        elseif targetModel:IsA("Model") then
-            targetModel:PivotTo(cframe)
+            HeldTool:PivotTo(cframe)
         end
     end
 end
@@ -161,13 +145,14 @@ swp1.MouseButton1Click:Connect(function() savePos("TP1", swp1) end)
 swp2.MouseButton1Click:Connect(function() savePos("TP2", swp2) end)
 swp3.MouseButton1Click:Connect(function() savePos("TP3", swp3) end)
 
-tp1.MouseButton1Click:Connect(function() teleportItemTo(savedPositions.TP1) end)
-tp2.MouseButton1Click:Connect(function() teleportItemTo(savedPositions.TP2) end)
-tp3.MouseButton1Click:Connect(function() teleportItemTo(savedPositions.TP3) end)
+-- ปุ่มวาร์ป (ดึงเฉพาะของในมือไปพิกัด)
+tp1.MouseButton1Click:Connect(function() teleportHeldItemTo(savedPositions.TP1) end)
+tp2.MouseButton1Click:Connect(function() teleportHeldItemTo(savedPositions.TP2) end)
+tp3.MouseButton1Click:Connect(function() teleportHeldItemTo(savedPositions.TP3) end)
 
-q1.MouseButton1Click:Connect(function() teleportItemTo(savedPositions.TP1) end)
-q2.MouseButton1Click:Connect(function() teleportItemTo(savedPositions.TP2) end)
-q3.MouseButton1Click:Connect(function() teleportItemTo(savedPositions.TP3) end)
+q1.MouseButton1Click:Connect(function() teleportHeldItemTo(savedPositions.TP1) end)
+q2.MouseButton1Click:Connect(function() teleportHeldItemTo(savedPositions.TP2) end)
+q3.MouseButton1Click:Connect(function() teleportHeldItemTo(savedPositions.TP3) end)
 
 -- Toggle External Quick Buttons
 local extVisible = true
