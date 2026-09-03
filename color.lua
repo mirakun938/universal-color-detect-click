@@ -1,4 +1,5 @@
 local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -8,8 +9,7 @@ end
 
 -- Variables
 local currentMode = "ALL" -- "ALL" หรือ "HELD"
-local headWeld = nil
-local attachedObject = nil
+local currentTween = nil
 
 -- Create ScreenGui
 local ScreenGui = Instance.new("ScreenGui")
@@ -34,7 +34,7 @@ UICorner.Parent = MainFrame
 -- Title
 local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, 0, 0, 40)
-Title.Text = "ITEM HEAD ATTACHER"
+Title.Text = "TWEEN ITEM TO HEAD"
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
 Title.TextSize = 13
 Title.Font = Enum.Font.SourceSansBold
@@ -55,7 +55,7 @@ UIListLayout.Padding = UDim.new(0, 8)
 UIListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 UIListLayout.Parent = Scroll
 
--- Quick Buttons Frame (External Circle Buttons)
+-- Quick External Buttons Frame
 local QuickFrame = Instance.new("Frame")
 QuickFrame.Size = UDim2.new(0, 110, 0, 50)
 QuickFrame.Position = UDim2.new(0.15, 0, 0.15, 0)
@@ -85,27 +85,26 @@ local function createButton(text, bgColor, parent, size)
     return btn
 end
 
--- Release Attached Item Logic
-local function releaseItem()
-    if headWeld then
-        headWeld:Destroy()
-        headWeld = nil
+-- Stop Current Tween
+local function stopTween()
+    if currentTween then
+        currentTween:Cancel()
+        currentTween = nil
     end
-    attachedObject = nil
 end
 
--- Attach Item To Head Logic
-local function attachItemToHead()
+-- Teleport Tween Item To Head Logic
+local function tweenItemToHead()
     local Character = LocalPlayer.Character
     if not Character then return end
     local Head = Character:FindFirstChild("Head")
     if not Head then return end
 
-    releaseItem() -- ปลดของเก่าออกก่อน
+    stopTween()
 
     local targetPart = nil
 
-    -- 1. เช็คของในมือก่อน (Held Item)
+    -- 1. เช็คของในมือ
     local HeldTool = Character:FindFirstChildOfClass("Tool")
     if HeldTool then
         targetPart = HeldTool:FindFirstChild("Handle") or HeldTool:FindFirstChildWhichIsA("BasePart")
@@ -126,27 +125,23 @@ local function attachItemToHead()
         end
     end
 
-    -- 3. ย้ายไอเทมมาอยู่บนหัวและติดกาว (Weld)
+    -- 3. ย้ายไอเทมด้วย Tween (0.15 วินาที) ลอยอยู่บนหัว
     if targetPart and targetPart:IsA("BasePart") then
-        targetPart.CFrame = Head.CFrame * CFrame.new(0, 3, 0)
+        local targetCFrame = Head.CFrame * CFrame.new(0, 2.5, 0)
+        local tweenInfo = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
         
-        local weld = Instance.new("WeldConstraint")
-        weld.Part0 = Head
-        weld.Part1 = targetPart
-        weld.Parent = targetPart
-
-        headWeld = weld
-        attachedObject = targetPart
+        currentTween = TweenService:Create(targetPart, tweenInfo, {CFrame = targetCFrame})
+        currentTween:Play()
     end
 end
 
--- Main UI Buttons
-local attachBtn = createButton("ATTACH ITEM TO HEAD", Color3.fromRGB(45, 90, 225), Scroll)
-local releaseBtn = createButton("RELEASE ITEM", Color3.fromRGB(200, 60, 60), Scroll)
+-- UI Buttons
+local attachBtn = createButton("TWEEN ITEM TO HEAD", Color3.fromRGB(45, 90, 225), Scroll)
+local releaseBtn = createButton("STOP TWEEN / RELEASE", Color3.fromRGB(200, 60, 60), Scroll)
 local modeBtn = createButton("MODE: ALL (TARGET + HELD)", Color3.fromRGB(120, 60, 180), Scroll)
 local extToggleBtn = createButton("EXTERNAL BUTTONS: ON", Color3.fromRGB(180, 45, 50), Scroll)
 
--- Quick External Buttons (วงกลมลอยด้านนอก)
+-- Quick External Buttons
 local quickAttach = createButton("HEAD", Color3.fromRGB(45, 90, 225), QuickFrame, UDim2.new(0, 45, 0, 45))
 local quickRelease = createButton("REL", Color3.fromRGB(200, 60, 60), QuickFrame, UDim2.new(0, 45, 0, 45))
 quickAttach.UICorner.CornerRadius = UDim.new(1, 0)
@@ -158,11 +153,11 @@ ToggleMainBtn.Position = UDim2.new(0, 15, 0, 15)
 ToggleMainBtn.UICorner.CornerRadius = UDim.new(0, 10)
 
 -- Events
-attachBtn.MouseButton1Click:Connect(attachItemToHead)
-quickAttach.MouseButton1Click:Connect(attachItemToHead)
+attachBtn.MouseButton1Click:Connect(tweenItemToHead)
+quickAttach.MouseButton1Click:Connect(tweenItemToHead)
 
-releaseBtn.MouseButton1Click:Connect(releaseItem)
-quickRelease.MouseButton1Click:Connect(releaseItem) -- ปุ่มปล่อยรวดเร็วภายนอก
+releaseBtn.MouseButton1Click:Connect(stopTween)
+quickRelease.MouseButton1Click:Connect(stopTween)
 
 modeBtn.MouseButton1Click:Connect(function()
     if currentMode == "ALL" then
