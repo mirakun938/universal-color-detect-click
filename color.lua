@@ -2,55 +2,43 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 
--- 1. Hook Index/NewIndex เพื่อป้องกันไม่ให้อาวุธลด Stamina หรือเช็กค่า Stamina
-local gmt = getrawmetatable(game)
-local oldIndex = gmt.__index
-local oldNewIndex = gmt.__newindex
-setreadonly(gmt, false)
-
-gmt.__index = newcclosure(function(self, key)
-    if not checkcaller() and typeof(self) == "Instance" then
-        if self.Name == "StaminaNeed" or self.Name == "StaminaUsed" then
-            return 0
-        end
+local function getValues()
+    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if playerGui and playerGui:FindFirstChild("MainUI") then
+        local bars = playerGui.MainUI:FindFirstChild("Bars")
+        if bars then return bars:FindFirstChild("Values") end
     end
-    return oldIndex(self, key)
-end)
+    return nil
+end
 
-gmt.__newindex = newcclosure(function(self, key, value)
-    if not checkcaller() and typeof(self) == "Instance" then
-        if self.Name == "StaminaNeed" or self.Name == "StaminaUsed" then
-            return oldNewIndex(self, key, 0)
-        end
-    end
-    return oldNewIndex(self, key, value)
-end)
-
-setreadonly(gmt, true)
-
--- 2. วนลูปบังคับค่า Stamina ในอาวุธและตัวละครให้เป็น 0 ตลอดเวลา
-RunService.Stepped:Connect(function()
-    local character = LocalPlayer.Character
-    local backpack = LocalPlayer:FindFirstChild("Backpack")
-
-    local function processTool(tool)
-        if tool:IsA("Tool") then
-            local sn = tool:FindFirstChild("StaminaNeed")
-            local su = tool:FindFirstChild("StaminaUsed")
-            local ca = tool:FindFirstChild("CanAttack")
+RunService.Heartbeat:Connect(function()
+    local values = getValues()
+    if values then
+        local staminaValue = values:FindFirstChild("StaminaValue")
+        local maxStamina = values:FindFirstChild("MaxStamina")
+        
+        if staminaValue then
+            local max = maxStamina and maxStamina.Value or 100
             
-            if sn then rawset(sn, "Value", 0) sn.Value = 0 end
-            if su then rawset(su, "Value", 0) su.Value = 0 end
-            if ca then ca.Value = true end
+            -- ถ้า Stamina ไม่เต็ม ให้ทำการเติมเพิ่มทีละมากๆ ในทุกๆ เฟรม (จำลองการยืนฟื้นฟูความเร็วสูง)
+            if staminaValue.Value < max then
+                -- เพิ่มทีละ 10% - 20% ต่อเฟรม เพื่อให้หลอดเด้งเต็มไวแทบทันทีที่กดตี
+                staminaValue.Value = math.min(max, staminaValue.Value + 15)
+            end
         end
-    end
 
-    if character then
-        for _, v in ipairs(character:GetChildren()) do processTool(v) end
-    end
-    if backpack then
-        for _, v in ipairs(backpack:GetChildren()) do processTool(v) end
+        -- บังคับเปิด CanSprint ให้เป็น true เสมอ เพื่อไม่ให้ติดสถานะเหนื่อยช้าลง
+        local canSprint = values:FindFirstChild("CanSprint")
+        if canSprint then
+            canSprint.Value = true
+        end
+
+        -- ปิดการชะลอความเร็ว
+        local sprintSlowDown = values:FindFirstChild("SprintSlowDown")
+        if sprintSlowDown then
+            sprintSlowDown.Value = false
+        end
     end
 end)
 
-print("Absolute Weapon Stamina Bypass Activated!")
+print("Fast Stamina Regen Activated!")
