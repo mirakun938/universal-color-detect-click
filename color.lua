@@ -21,11 +21,12 @@ local espStates = {
     DIAMOND = true,
     GOLD = true,
     NEON = true,
-    DIRTY_METAL = true,
+    RUSTY = true,
+    METAL = true,
     PURE_METAL = true
 }
 
--- ฟังก์ชันแยกประเภทเศษเหล็กและกำหนดสี
+-- ฟังก์ชันแยกประเภทเศษเหล็กและกำหนดสีตามภาพ
 local function getScrapCategory(name)
     local upper = string.upper(name)
     
@@ -40,10 +41,12 @@ local function getScrapCategory(name)
         return "GOLD", Color3.fromRGB(255, 215, 0)
     elseif string.find(upper, "SCRAPNEON") then
         return "NEON", Color3.fromRGB(50, 255, 50)
+    elseif string.find(upper, "SCRAPRUSTY") then
+        return "RUSTY", Color3.fromRGB(255, 140, 0) -- RUSTY (สีส้ม)
     elseif string.find(upper, "SCRAPMETAL2_") then
-        return "PURE_METAL", Color3.fromRGB(180, 180, 180) -- เหล็กแท้ (สีเทา)
+        return "PURE_METAL", Color3.fromRGB(255, 255, 255) -- METAL 2_1-4 (สีขาว)
     elseif string.find(upper, "SCRAPMETAL_") then
-        return "DIRTY_METAL", Color3.fromRGB(255, 140, 0) -- เหล็กสกปรก (สีส้ม)
+        return "METAL", Color3.fromRGB(150, 150, 150) -- METAL _1-4 (สีเทา)
     end
     
     return nil
@@ -67,7 +70,7 @@ local function applyESP(target)
     highlight.Adornee = target
     highlight.FillColor = color
     highlight.FillTransparency = 0.4
-    highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+    highlight.OutlineColor = (category == "PURE_METAL") and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
     highlight.Enabled = espStates[category]
     highlight.Parent = espFolder
@@ -121,7 +124,7 @@ Workspace.DescendantAdded:Connect(function(obj)
 end)
 
 ----------------------------------------------------
--- 🖥️ ส่วนของการสร้าง UI Control Panel + ปุ่ม Minimize
+-- 🖥️ UI Control Panel (+ ปุ่ม Minimize)
 ----------------------------------------------------
 local playerGui = LocalPlayer:WaitForChild("PlayerGui")
 local screenGui = Instance.new("ScreenGui")
@@ -131,7 +134,7 @@ screenGui.Parent = playerGui
 
 local mainFrame = Instance.new("Frame")
 mainFrame.Name = "MainFrame"
-mainFrame.Size = UDim2.new(0, 190, 0, 250)
+mainFrame.Size = UDim2.new(0, 190, 0, 285)
 mainFrame.Position = UDim2.new(0.02, 0, 0.3, 0)
 mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
 mainFrame.BorderSizePixel = 0
@@ -157,7 +160,6 @@ local titleCorner = Instance.new("UICorner")
 titleCorner.CornerRadius = UDim.new(0, 8)
 titleCorner.Parent = title
 
--- ปุ่มMinimize ปิด/เปิด UI หลัก
 local minimizeBtn = Instance.new("TextButton")
 minimizeBtn.Size = UDim2.new(0, 25, 0, 25)
 minimizeBtn.Position = UDim2.new(1, -30, 0, 5)
@@ -188,7 +190,7 @@ minimizeBtn.MouseButton1Click:Connect(function()
         minimizeBtn.Text = "+"
     else
         contentFrame.Visible = true
-        mainFrame.Size = UDim2.new(0, 190, 0, 250)
+        mainFrame.Size = UDim2.new(0, 190, 0, 285)
         minimizeBtn.Text = "-"
     end
 end)
@@ -206,19 +208,20 @@ local categories = {
     {ID = "DIAMOND", Name = "DIAMOND", Color = Color3.fromRGB(0, 255, 255)},
     {ID = "GOLD", Name = "GOLD", Color = Color3.fromRGB(255, 215, 0)},
     {ID = "NEON", Name = "NEON", Color = Color3.fromRGB(50, 255, 50)},
-    {ID = "DIRTY_METAL", Name = "DIRTY METAL", Color = Color3.fromRGB(255, 140, 0)},
-    {ID = "PURE_METAL", Name = "PURE METAL", Color = Color3.fromRGB(180, 180, 180)}
+    {ID = "RUSTY", Name = "RUSTY (ORANGE)", Color = Color3.fromRGB(255, 140, 0)},
+    {ID = "METAL", Name = "METAL (GRAY)", Color = Color3.fromRGB(150, 150, 150)},
+    {ID = "PURE_METAL", Name = "METAL 2 (WHITE)", Color = Color3.fromRGB(230, 230, 230)}
 }
 
 for i, cat in ipairs(categories) do
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0.85, 0, 0, 32)
-    btn.Position = UDim2.new(0.075, 0, 0, 8 + ((i - 1) * 38))
+    btn.Size = UDim2.new(0.88, 0, 0, 32)
+    btn.Position = UDim2.new(0.06, 0, 0, 6 + ((i - 1) * 37))
     btn.BackgroundColor3 = cat.Color
     btn.Text = cat.Name .. ": ON"
     btn.TextColor3 = Color3.fromRGB(0, 0, 0)
     btn.Font = Enum.Font.SourceSansBold
-    btn.TextSize = 13
+    btn.TextSize = 12
     btn.Parent = contentFrame
 
     local btnCorner = Instance.new("UICorner")
@@ -241,4 +244,4 @@ for i, cat in ipairs(categories) do
     end)
 end
 
-print("Scrap ESP (Updated Metal Types & Minimize UI) Loaded!")
+print("Scrap ESP (Corrected Rusty & Metal Colors) Activated!")
