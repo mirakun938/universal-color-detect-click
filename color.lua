@@ -11,37 +11,38 @@ local function getValues()
     return nil
 end
 
+local values = getValues()
+if values then
+    local staminaValue = values:FindFirstChild("StaminaValue")
+    if staminaValue then
+        local lastStamina = staminaValue.Value
+
+        -- ดักจับจังหวะที่เกมทำการเพิ่ม/รีเจ็น Stamina ให้ตัวละคร
+        staminaValue.Changed:Connect(function(newVal)
+            -- ถ้าค่า Stamina กำลังเพิ่มขึ้น (แสดงว่าอยู่ในโหมด Regen)
+            if newVal > lastStamina then
+                local maxStamina = values:FindFirstChild("MaxStamina")
+                local max = maxStamina and maxStamina.Value or 100
+                
+                -- เร่งอัตราการเพิ่มขึ้นให้อีกเท่าตัว (แปลงการเพิ่ม 1% ให้เป็น 2% หรือมากกว่าทันที)
+                local diff = newVal - lastStamina
+                local boostedVal = math.min(max, newVal + (diff * 2))
+                
+                -- อัปเดตค่า Stamina ทันที
+                staminaValue.Value = boostedVal
+            end
+            lastStamina = staminaValue.Value
+        end)
+    end
+end
+
+-- ล็อคเงื่อนไขย่อยเพื่อไม่ให้ติด Cooldown ชะลอความเร็ว
 RunService.RenderStepped:Connect(function()
-    local values = getValues()
-    if values then
-        -- 1. หลอกสถานะว่าไม่ได้กำลังวิ่งหรือเคลื่อนไหว (เพื่อให้เกมใช้ Regen Rate ตอนยืนนิ่ง)
-        local isSprinting = values:FindFirstChild("IsSprinting") or values:FindFirstChild("Sprinting")
-        if isSprinting and isSprinting:IsA("ValueBase") then
-            isSprinting.Value = false
-        end
-
-        local isMoving = values:FindFirstChild("IsMoving") or values:FindFirstChild("Moving")
-        if isMoving and isMoving:IsA("ValueBase") then
-            isMoving.Value = false
-        end
-
-        -- 2. อนุญาตให้รีเจ็น Stamina ได้ตลอดเวลา
-        local canRegen = values:FindFirstChild("CanRegen") or values:FindFirstChild("RegenStamina")
-        if canRegen and canRegen:IsA("ValueBase") then
-            canRegen.Value = true
-        end
-
-        -- 3. ปล่อยให้ Stamina ลดได้ตามปกติเมื่อกดตี แต่บังคับไม่ให้ติดสถานะเหนื่อย (SprintSlowDown)
-        local sprintSlowDown = values:FindFirstChild("SprintSlowDown")
-        if sprintSlowDown and sprintSlowDown:IsA("ValueBase") then
-            sprintSlowDown.Value = false
-        end
-        
-        local canSprint = values:FindFirstChild("CanSprint")
-        if canSprint and canSprint:IsA("ValueBase") then
-            canSprint.Value = true
-        end
+    local val = getValues()
+    if val then
+        if val:FindFirstChild("CanSprint") then val.CanSprint.Value = true end
+        if val:FindFirstChild("SprintSlowDown") then val.SprintSlowDown.Value = false end
     end
 end)
 
-print("Fake Standing State (Fast Stamina Regen) Activated!")
+print("Regen Multiplier Activated!")
