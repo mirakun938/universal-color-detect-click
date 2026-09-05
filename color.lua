@@ -2,35 +2,44 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 
-local function getValues()
-    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-    if playerGui and playerGui:FindFirstChild("MainUI") then
-        local bars = playerGui.MainUI:FindFirstChild("Bars")
-        if bars then return bars:FindFirstChild("Values") end
-    end
-    return nil
-end
+local currentConnection = nil
 
-local values = getValues()
-if values then
-    local staminaValue = values:FindFirstChild("StaminaValue")
-    local maxStamina = values:FindFirstChild("MaxStamina")
+-- ฟังก์ชันผูกสคริปต์กับ StaminaValue ชิ้นใหม่
+local function setupRegen()
+    if currentConnection then
+        currentConnection:Disconnect()
+        currentConnection = nil
+    end
+
+    local playerGui = LocalPlayer:WaitForChild("PlayerGui", 10)
+    if not playerGui then return end
     
+    local mainUI = playerGui:WaitForChild("MainUI", 10)
+    if not mainUI then return end
+    
+    local bars = mainUI:WaitForChild("Bars", 10)
+    if not bars then return end
+    
+    local values = bars:WaitForChild("Values", 10)
+    if not values then return end
+
+    local staminaValue = values:WaitForChild("StaminaValue", 10)
+    local maxStamina = values:FindFirstChild("MaxStamina")
+
     if staminaValue then
-        local isUpdating = false -- กัน Infinite Loop การจับสัญญาณ
+        local isUpdating = false
         local lastValue = staminaValue.Value
 
-        staminaValue.Changed:Connect(function(newVal)
+        currentConnection = staminaValue.Changed:Connect(function(newVal)
             if isUpdating then return end
             
             local max = maxStamina and maxStamina.Value or 100
             
-            -- ถ้าเกมพยายามดึงค่า Stamina ลดลง ทั้งๆ ที่ควรเป็นการฟื้นฟู ให้ล็อคไม่ให้ย้อนกลับ
+            -- จังหวะกดตี/ถูกหัก Stamina: ปล่อยให้ลดได้ตามปกติ
             if newVal < lastValue and (max - newVal) > 5 then
-                -- จังหวะนี้ปล่อยให้อาวุธหักค่า Stamina ได้ตามปกติ
                 lastValue = newVal
             elseif newVal > lastValue then
-                -- จังหวะฟื้นฟู: บังคับเพิ่มเป็น +2% ทันที และป้องกันไม่ให้เด้งกลับ
+                -- จังหวะฟื้นฟู: บังคับเพิ่มขึ้น +2% ทันที ไม่ให้เด้งย้อนกลับ
                 isUpdating = true
                 local targetValue = math.min(max, lastValue + 2)
                 staminaValue.Value = targetValue
@@ -41,13 +50,26 @@ if values then
     end
 end
 
--- ปิดสถานะเหนื่อย/ชะลอความเร็ว
+-- 1. ทำงานครั้งแรกทันทีที่รันสคริปต์
+task.spawn(setupRegen)
+
+-- 2. ดักจับเมื่อตัวละครเกิดใหม่ (Respawn/Death) ให้ผูกสคริปต์ใหม่ทันที
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1) -- รอ UI โหลดขึ้นมาสมบูรณ์หลังตาย
+    setupRegen()
+end)
+
+-- 3. ล็อคเงื่อนไข CanSprint / SprintSlowDown ไว้ตลอดเวลา
 RunService.RenderStepped:Connect(function()
-    local val = getValues()
-    if val then
-        if val:FindFirstChild("CanSprint") then val.CanSprint.Value = true end
-        if val:FindFirstChild("SprintSlowDown") then val.SprintSlowDown.Value = false end
+    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if playerGui and playerGui:FindFirstChild("MainUI") then
+        local bars = playerGui.MainUI:FindFirstChild("Bars")
+        if bars and bars:FindFirstChild("Values") then
+            local val = bars.Values
+            if val:FindFirstChild("CanSprint") then val.CanSprint.Value = true end
+            if val:FindFirstChild("SprintSlowDown") then val.SprintSlowDown.Value = false end
+        end
     end
 end)
 
-print("Smooth 2% Regen (Anti-Revert) Activated!")
+print("Respawn-Proof 2% Stamina Regen Activated!")
