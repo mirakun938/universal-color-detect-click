@@ -1,75 +1,94 @@
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local LocalPlayer = Players.LocalPlayer
+local CoreGui = game:GetService("CoreGui")
+local Workspace = game:GetService("Workspace")
 
-local currentConnection = nil
+-- โฟลเดอร์เก็บ ESP
+local espFolder = Instance.new("Folder")
+espFolder.Name = "ScrapESP_Folder"
+espFolder.Parent = CoreGui
 
--- ฟังก์ชันผูกสคริปต์กับ StaminaValue ชิ้นใหม่
-local function setupRegen()
-    if currentConnection then
-        currentConnection:Disconnect()
-        currentConnection = nil
+-- ฟังก์ชันเลือกสี Highlight ตามประเภทเศษเหล็ก
+local function getScrapColor(name)
+    local upperName = string.upper(name)
+    if string.find(upperName, "DIAMOND") then
+        return Color3.fromRGB(0, 255, 255) -- สีฟ้า DIAMOND
+    elseif string.find(upperName, "GOLD") then
+        return Color3.fromRGB(255, 215, 0) -- สีทอง GOLD
+    elseif string.find(upperName, "NEON") then
+        return Color3.fromRGB(50, 255, 50) -- สีเขียว NEON
+    elseif string.find(upperName, "METAL") or string.find(upperName, "SCRAP") then
+        return Color3.fromRGB(255, 140, 0) -- สีส้ม METAL
     end
+    return nil
+end
 
-    local playerGui = LocalPlayer:WaitForChild("PlayerGui", 10)
-    if not playerGui then return end
+-- ฟังก์ชันสร้าง Highlight และ ป้ายชื่อ ESP
+local function applyScrapESP(target)
+    if not target or target:FindFirstChild("ScrapESP_Added") then return end
     
-    local mainUI = playerGui:WaitForChild("MainUI", 10)
-    if not mainUI then return end
+    local color = getScrapColor(target.Name)
+    if not color then return end
     
-    local bars = mainUI:WaitForChild("Bars", 10)
-    if not bars then return end
-    
-    local values = bars:WaitForChild("Values", 10)
-    if not values then return end
+    -- ทำเครื่องหมายว่าติด ESP แล้ว
+    local tag = Instance.new("BoolValue")
+    tag.Name = "ScrapESP_Added"
+    tag.Parent = target
 
-    local staminaValue = values:WaitForChild("StaminaValue", 10)
-    local maxStamina = values:FindFirstChild("MaxStamina")
+    -- 1. สร้าง Highlight ทะลุกำแพง
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "ScrapHighlight"
+    highlight.Adornee = target
+    highlight.FillColor = color
+    highlight.FillTransparency = 0.4
+    highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+    highlight.OutlineTransparency = 0
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Parent = espFolder
 
-    if staminaValue then
-        local isUpdating = false
-        local lastValue = staminaValue.Value
+    -- 2. สร้างป้ายชื่อแสดงประเภท
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "ScrapNameTag"
+    billboard.Adornee = target
+    billboard.Size = UDim2.new(0, 100, 0, 30)
+    billboard.StudsOffset = Vector3.new(0, 2, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Parent = espFolder
 
-        currentConnection = staminaValue.Changed:Connect(function(newVal)
-            if isUpdating then return end
-            
-            local max = maxStamina and maxStamina.Value or 100
-            
-            -- จังหวะกดตี/ถูกหัก Stamina: ปล่อยให้ลดได้ตามปกติ
-            if newVal < lastValue and (max - newVal) > 5 then
-                lastValue = newVal
-            elseif newVal > lastValue then
-                -- จังหวะฟื้นฟู: บังคับเพิ่มขึ้น +2% ทันที ไม่ให้เด้งย้อนกลับ
-                isUpdating = true
-                local targetValue = math.min(max, lastValue + 2)
-                staminaValue.Value = targetValue
-                lastValue = targetValue
-                isUpdating = false
-            end
-        end)
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Text = target.Name
+    label.TextColor3 = color
+    label.TextStrokeTransparency = 0
+    label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    label.Font = Enum.Font.SourceSansBold
+    label.TextSize = 14
+    label.Parent = billboard
+
+    -- เมื่อเศษเหล็กหายไป/โดนเก็บ ให้ลบ ESP ออก
+    target.AncestryChanged:Connect(function(_, parent)
+        if not parent then
+            highlight:Destroy()
+            billboard:Destroy()
+        end
+    end)
+end
+
+-- สแกนวัตถุทั้งหมดใน Workspace
+local function scan()
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if getScrapColor(obj.Name) and (obj:IsA("Model") or obj:IsA("BasePart")) then
+            applyScrapESP(obj)
+        end
     end
 end
 
--- 1. ทำงานครั้งแรกทันทีที่รันสคริปต์
-task.spawn(setupRegen)
-
--- 2. ดักจับเมื่อตัวละครเกิดใหม่ (Respawn/Death) ให้ผูกสคริปต์ใหม่ทันที
-LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(1) -- รอ UI โหลดขึ้นมาสมบูรณ์หลังตาย
-    setupRegen()
-end)
-
--- 3. ล็อคเงื่อนไข CanSprint / SprintSlowDown ไว้ตลอดเวลา
-RunService.RenderStepped:Connect(function()
-    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-    if playerGui and playerGui:FindFirstChild("MainUI") then
-        local bars = playerGui.MainUI:FindFirstChild("Bars")
-        if bars and bars:FindFirstChild("Values") then
-            local val = bars.Values
-            if val:FindFirstChild("CanSprint") then val.CanSprint.Value = true end
-            if val:FindFirstChild("SprintSlowDown") then val.SprintSlowDown.Value = false end
-        end
+-- ทำงานทันที + ดักจับเศษเหล็กที่สปอว์นใหม่
+scan()
+Workspace.DescendantAdded:Connect(function(obj)
+    if getScrapColor(obj.Name) and (obj:IsA("Model") or obj:IsA("BasePart")) then
+        task.wait(0.1)
+        applyScrapESP(obj)
     end
 end)
 
-print("Respawn-Proof 2% Stamina Regen Activated!")
+print("Scrap ESP (Multi-Color) Loaded Successfully!")
