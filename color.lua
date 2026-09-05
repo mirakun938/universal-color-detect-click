@@ -12,36 +12,52 @@ local function getValues()
 end
 
 RunService.RenderStepped:Connect(function()
+    -- 1. ล็อคระบบ Stamina การวิ่ง/เดิน
     local values = getValues()
     if values then
-        -- 1. รีเซ็ต Stamina ให้เต็ม 100 ตลอดเวลา
         if values:FindFirstChild("StaminaValue") then values.StaminaValue.Value = 100 end
-        if values:FindFirstChild("MaxStamina") then values.StaminaValue.Value = values.MaxStamina.Value end
-        
-        -- 2. อนุญาตให้กดวิ่งได้ตลอดเวลา
         if values:FindFirstChild("CanSprint") then values.CanSprint.Value = true end
         if values:FindFirstChild("StaminaDrain") then values.StaminaDrain.Value = 0 end
         if values:FindFirstChild("SprintSlowDown") then values.SprintSlowDown.Value = false end
+    end
 
-        -- 3. แก้ปัญหาตัวละครหลุดวิ่ง (Reset Timer / Override Speed)
-        local character = LocalPlayer.Character
-        if character and character:FindFirstChild("Humanoid") then
-            local humanoid = character.Humanoid
-            
-            -- ถ้ากำลังกดวิ่งอยู่ แต่สคริปต์เกมสั่งหยุดวิ่งเอง ให้รีเซ็ตค่าเพื่อกดวิ่งต่อได้ทันที
-            if values:FindFirstChild("IsSprinting") then
-                -- เช็กว่าถ้าความเร็วตกขณะที่ยังกดวิ่ง ให้เปิด CanSprint ซ้ำเพื่อ Bypass ตัวนับเวลา
-                if humanoid.MoveDirection.Magnitude > 0 and values.CanSprint.Value == false then
-                    values.CanSprint.Value = true
+    local character = LocalPlayer.Character
+    if character then
+        -- 2. ดักจับค่าการโจมตีในตัวละคร (ถ้ามี)
+        for _, child in ipairs(character:GetChildren()) do
+            if child:IsA("BoolValue") then
+                if child.Name:find("Attack") or child.Name:find("Swing") or child.Name:find("Debounce") then
+                    if child.Name == "CanAttack" then
+                        child.Value = true
+                    elseif child.Name == "Attacking" or child.Name == "Swinging" then
+                        child.Value = false
+                    end
                 end
             end
-            
-            -- ล็อค WalkSpeed ไม่ให้ลดเป็นความเร็วเดินปกติขณะกดวิ่ง
-            if values:FindFirstChild("Sprinting") and values.Sprinting.Value == true then
-                humanoid.WalkSpeed = 25
+        end
+
+        -- 3. ดักจับอาวุธที่ถืออยู่ในมือ (Tool)
+        local currentTool = character:FindFirstChildOfClass("Tool")
+        if currentTool then
+            -- ปลดล็อก Debounce / Cooldown ในตัวอาวุธ
+            for _, item in ipairs(currentTool:GetDescendants()) do
+                if item:IsA("BoolValue") then
+                    if item.Name == "CanAttack" or item.Name == "CanSwing" or item.Name == "Ready" then
+                        item.Value = true
+                    elseif item.Name == "Attacking" or item.Name == "Debounce" or item.Name == "Cooldown" then
+                        item.Value = false
+                    end
+                elseif item:IsA("NumberValue") or item:IsA("IntValue") then
+                    -- ถ้าระบบอาวุธใช้ Stamina แยกของตัวเอง ให้เติมให้เต็ม
+                    if item.Name:find("Stamina") or item.Name:find("Cost") then
+                        if item.Name:find("Cost") then
+                            item.Value = 0 -- ปรับค่าใช้ Stamina ของอาวุธเป็น 0
+                        end
+                    end
+                end
             end
         end
     end
 end)
 
-print("Infinite Sprint (Fix Auto-Stop) Activated!")
+print("Infinite Stamina + Fast Continuous Attack Activated!")
