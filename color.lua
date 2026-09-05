@@ -14,29 +14,34 @@ end
 local values = getValues()
 if values then
     local staminaValue = values:FindFirstChild("StaminaValue")
+    local maxStamina = values:FindFirstChild("MaxStamina")
+    
     if staminaValue then
-        local lastStamina = staminaValue.Value
+        local isUpdating = false -- กัน Infinite Loop การจับสัญญาณ
+        local lastValue = staminaValue.Value
 
-        -- ดักจับจังหวะที่เกมทำการเพิ่ม/รีเจ็น Stamina ให้ตัวละคร
         staminaValue.Changed:Connect(function(newVal)
-            -- ถ้าค่า Stamina กำลังเพิ่มขึ้น (แสดงว่าอยู่ในโหมด Regen)
-            if newVal > lastStamina then
-                local maxStamina = values:FindFirstChild("MaxStamina")
-                local max = maxStamina and maxStamina.Value or 100
-                
-                -- เร่งอัตราการเพิ่มขึ้นให้อีกเท่าตัว (แปลงการเพิ่ม 1% ให้เป็น 2% หรือมากกว่าทันที)
-                local diff = newVal - lastStamina
-                local boostedVal = math.min(max, newVal + (diff * 2))
-                
-                -- อัปเดตค่า Stamina ทันที
-                staminaValue.Value = boostedVal
+            if isUpdating then return end
+            
+            local max = maxStamina and maxStamina.Value or 100
+            
+            -- ถ้าเกมพยายามดึงค่า Stamina ลดลง ทั้งๆ ที่ควรเป็นการฟื้นฟู ให้ล็อคไม่ให้ย้อนกลับ
+            if newVal < lastValue and (max - newVal) > 5 then
+                -- จังหวะนี้ปล่อยให้อาวุธหักค่า Stamina ได้ตามปกติ
+                lastValue = newVal
+            elseif newVal > lastValue then
+                -- จังหวะฟื้นฟู: บังคับเพิ่มเป็น +2% ทันที และป้องกันไม่ให้เด้งกลับ
+                isUpdating = true
+                local targetValue = math.min(max, lastValue + 2)
+                staminaValue.Value = targetValue
+                lastValue = targetValue
+                isUpdating = false
             end
-            lastStamina = staminaValue.Value
         end)
     end
 end
 
--- ล็อคเงื่อนไขย่อยเพื่อไม่ให้ติด Cooldown ชะลอความเร็ว
+-- ปิดสถานะเหนื่อย/ชะลอความเร็ว
 RunService.RenderStepped:Connect(function()
     local val = getValues()
     if val then
@@ -45,4 +50,4 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
-print("Regen Multiplier Activated!")
+print("Smooth 2% Regen (Anti-Revert) Activated!")
