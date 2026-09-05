@@ -11,34 +11,37 @@ local function getValues()
     return nil
 end
 
-RunService.Heartbeat:Connect(function()
+RunService.RenderStepped:Connect(function()
     local values = getValues()
     if values then
-        local staminaValue = values:FindFirstChild("StaminaValue")
-        local maxStamina = values:FindFirstChild("MaxStamina")
-        
-        if staminaValue then
-            local max = maxStamina and maxStamina.Value or 100
-            
-            -- ถ้า Stamina ไม่เต็ม ให้ทำการเติมเพิ่มทีละมากๆ ในทุกๆ เฟรม (จำลองการยืนฟื้นฟูความเร็วสูง)
-            if staminaValue.Value < max then
-                -- เพิ่มทีละ 10% - 20% ต่อเฟรม เพื่อให้หลอดเด้งเต็มไวแทบทันทีที่กดตี
-                staminaValue.Value = math.min(max, staminaValue.Value + 15)
-            end
+        -- 1. หลอกสถานะว่าไม่ได้กำลังวิ่งหรือเคลื่อนไหว (เพื่อให้เกมใช้ Regen Rate ตอนยืนนิ่ง)
+        local isSprinting = values:FindFirstChild("IsSprinting") or values:FindFirstChild("Sprinting")
+        if isSprinting and isSprinting:IsA("ValueBase") then
+            isSprinting.Value = false
         end
 
-        -- บังคับเปิด CanSprint ให้เป็น true เสมอ เพื่อไม่ให้ติดสถานะเหนื่อยช้าลง
-        local canSprint = values:FindFirstChild("CanSprint")
-        if canSprint then
-            canSprint.Value = true
+        local isMoving = values:FindFirstChild("IsMoving") or values:FindFirstChild("Moving")
+        if isMoving and isMoving:IsA("ValueBase") then
+            isMoving.Value = false
         end
 
-        -- ปิดการชะลอความเร็ว
+        -- 2. อนุญาตให้รีเจ็น Stamina ได้ตลอดเวลา
+        local canRegen = values:FindFirstChild("CanRegen") or values:FindFirstChild("RegenStamina")
+        if canRegen and canRegen:IsA("ValueBase") then
+            canRegen.Value = true
+        end
+
+        -- 3. ปล่อยให้ Stamina ลดได้ตามปกติเมื่อกดตี แต่บังคับไม่ให้ติดสถานะเหนื่อย (SprintSlowDown)
         local sprintSlowDown = values:FindFirstChild("SprintSlowDown")
-        if sprintSlowDown then
+        if sprintSlowDown and sprintSlowDown:IsA("ValueBase") then
             sprintSlowDown.Value = false
+        end
+        
+        local canSprint = values:FindFirstChild("CanSprint")
+        if canSprint and canSprint:IsA("ValueBase") then
+            canSprint.Value = true
         end
     end
 end)
 
-print("Fast Stamina Regen Activated!")
+print("Fake Standing State (Fast Stamina Regen) Activated!")
