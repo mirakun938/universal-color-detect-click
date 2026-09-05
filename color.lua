@@ -2,66 +2,35 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 
-local function getStaminaValues()
+-- เข้าถึงโฟลเดอร์ Values
+local function getValues()
     local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-    if playerGui then
-        local mainUI = playerGui:FindFirstChild("MainUI")
-        if mainUI then
-            local bars = mainUI:FindFirstChild("Bars")
-            if bars then
-                return bars:FindFirstChild("Values")
-            end
-        end
+    if playerGui and playerGui:FindFirstChild("MainUI") then
+        local bars = playerGui.MainUI:FindFirstChild("Bars")
+        if bars then return bars:FindFirstChild("Values") end
     end
     return nil
 end
 
-RunService.Heartbeat:Connect(function()
-    local values = getStaminaValues()
+RunService.RenderStepped:Connect(function()
+    -- 1. บังคับค่าใน Values ไม่ให้ลด และปิดอัตราการเหนื่อย
+    local values = getValues()
     if values then
-        -- 1. ล็อค Stamina ให้เต็มตลอดเวลา
-        local maxStamina = values:FindFirstChild("MaxStamina")
-        local staminaValue = values:FindFirstChild("StaminaValue")
-        local maxVal = (maxStamina and maxStamina.Value > 0) and maxStamina.Value or 100
-        
-        if staminaValue then
-            staminaValue.Value = maxVal
-        end
+        if values:FindFirstChild("StaminaValue") then values.StaminaValue.Value = 100 end
+        if values:FindFirstChild("CanSprint") then values.CanSprint.Value = true end
+        if values:FindFirstChild("StaminaDrain") then values.StaminaDrain.Value = 0 end
+        if values:FindFirstChild("SprintSlowDown") then values.SprintSlowDown.Value = false end
+    end
 
-        -- 2. อนุญาตให้กดวิ่งได้ตลอด
-        local canSprint = values:FindFirstChild("CanSprint")
-        if canSprint and canSprint:IsA("BoolValue") then
-            canSprint.Value = true
-        end
-
-        -- 3. ปรับอัตราการหัก Stamina ให้เป็น 0
-        local staminaDrain = values:FindFirstChild("StaminaDrain")
-        if staminaDrain then
-            staminaDrain.Value = 0
-        end
-
-        -- 4. ลบ/ปิด คูลดาวน์การลด Stamina
-        local drainCooldown = values:FindFirstChild("DrainCooldown")
-        if drainCooldown then
-            drainCooldown.Value = 0
-        end
-
-        -- 5. ปิดสถานะ SlowDown (อาการเหนื่อย/เดินช้า)
-        local sprintSlowDown = values:FindFirstChild("SprintSlowDown")
-        if sprintSlowDown then
-            if sprintSlowDown:IsA("BoolValue") then
-                sprintSlowDown.Value = false
-            elseif sprintSlowDown:IsA("NumberValue") then
-                sprintSlowDown.Value = 0
-            end
-        end
-        
-        -- 6. ป้องกันไม่ให้ขึ้นสถานะ Using ค้าง
-        local usingVal = values:FindFirstChild("Using")
-        if usingVal and usingVal:IsA("BoolValue") and not values:FindFirstChild("Sprinting").Value then
-            usingVal.Value = false
+    -- 2. ดักจับและล็อคความเร็ว WalkSpeed ของตัวละคร ไม่ให้สคริปต์เกมปรับลดตอนเหนื่อย
+    local character = LocalPlayer.Character
+    if character and character:FindFirstChild("Humanoid") then
+        local humanoid = character.Humanoid
+        -- หากกำลังกดวิ่ง (Sprinting) ให้ล็อคความเร็วไว้ที่ความเร็ววิ่ง (ปกติประมาณ 24-26)
+        if values and values:FindFirstChild("Sprinting") and values.Sprinting.Value == true then
+            humanoid.WalkSpeed = 25
         end
     end
 end)
 
-print("Full Infinite Stamina & Anti-Tired Activated!")
+print("Advanced Infinite Stamina Activated!")
