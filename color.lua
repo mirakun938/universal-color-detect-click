@@ -11,8 +11,26 @@ local function getValues()
     return nil
 end
 
+-- ปรับแต่งค่าเมื่อถืออาวุธที่ซื้อมา
+local function setupTool(tool)
+    if not tool:IsA("Tool") then return end
+    
+    -- ค้นหาและปลดล็อก Cooldown ภายในตัวอาวุธ
+    for _, v in ipairs(tool:GetDescendants()) do
+        if v:IsA("NumberValue") or v:IsA("IntValue") then
+            if v.Name:lower():find("cooldown") or v.Name:lower():find("delay") or v.Name:lower():find("stamina") then
+                v.Value = 0
+            end
+        elseif v:IsA("BoolValue") then
+            if v.Name:lower():find("canattack") or v.Name:lower():find("ready") then
+                v.Value = true
+            end
+        end
+    end
+end
+
 RunService.RenderStepped:Connect(function()
-    -- 1. ล็อคระบบ Stamina การวิ่ง/เดิน
+    -- 1. ล็อคระบบ Stamina ไม่ให้ลด
     local values = getValues()
     if values then
         if values:FindFirstChild("StaminaValue") then values.StaminaValue.Value = 100 end
@@ -21,43 +39,27 @@ RunService.RenderStepped:Connect(function()
         if values:FindFirstChild("SprintSlowDown") then values.SprintSlowDown.Value = false end
     end
 
+    -- 2. ปรับค่า Swing Speed ให้อยู่ในเกณฑ์ที่ตีนุ่มนวล ไม่โดน Server ปฏิเสธ
+    local swingSpeed = LocalPlayer:FindFirstChild("SwingSpeedMultiply")
+    if swingSpeed then swingSpeed.Value = 1.25 end
+
+    local ogSwingSpeed = LocalPlayer:FindFirstChild("OGSwingSpeedMultiply")
+    if ogSwingSpeed then ogSwingSpeed.Value = 1.25 end
+
+    -- 3. ตรวจจับอาวุธในมือและใน Backpack
     local character = LocalPlayer.Character
     if character then
-        -- 2. ดักจับค่าการโจมตีในตัวละคร (ถ้ามี)
         for _, child in ipairs(character:GetChildren()) do
-            if child:IsA("BoolValue") then
-                if child.Name:find("Attack") or child.Name:find("Swing") or child.Name:find("Debounce") then
-                    if child.Name == "CanAttack" then
-                        child.Value = true
-                    elseif child.Name == "Attacking" or child.Name == "Swinging" then
-                        child.Value = false
-                    end
-                end
-            end
+            setupTool(child)
         end
-
-        -- 3. ดักจับอาวุธที่ถืออยู่ในมือ (Tool)
-        local currentTool = character:FindFirstChildOfClass("Tool")
-        if currentTool then
-            -- ปลดล็อก Debounce / Cooldown ในตัวอาวุธ
-            for _, item in ipairs(currentTool:GetDescendants()) do
-                if item:IsA("BoolValue") then
-                    if item.Name == "CanAttack" or item.Name == "CanSwing" or item.Name == "Ready" then
-                        item.Value = true
-                    elseif item.Name == "Attacking" or item.Name == "Debounce" or item.Name == "Cooldown" then
-                        item.Value = false
-                    end
-                elseif item:IsA("NumberValue") or item:IsA("IntValue") then
-                    -- ถ้าระบบอาวุธใช้ Stamina แยกของตัวเอง ให้เติมให้เต็ม
-                    if item.Name:find("Stamina") or item.Name:find("Cost") then
-                        if item.Name:find("Cost") then
-                            item.Value = 0 -- ปรับค่าใช้ Stamina ของอาวุธเป็น 0
-                        end
-                    end
-                end
-            end
+    end
+    
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    if backpack then
+        for _, child in ipairs(backpack:GetChildren()) do
+            setupTool(child)
         end
     end
 end)
 
-print("Infinite Stamina + Fast Continuous Attack Activated!")
+print("Shop Weapon Continuous Attack Script Activated!")
