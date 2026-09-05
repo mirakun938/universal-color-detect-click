@@ -2,7 +2,6 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 
--- เข้าถึงโฟลเดอร์ Values
 local function getValues()
     local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
     if playerGui and playerGui:FindFirstChild("MainUI") then
@@ -13,24 +12,36 @@ local function getValues()
 end
 
 RunService.RenderStepped:Connect(function()
-    -- 1. บังคับค่าใน Values ไม่ให้ลด และปิดอัตราการเหนื่อย
     local values = getValues()
     if values then
+        -- 1. รีเซ็ต Stamina ให้เต็ม 100 ตลอดเวลา
         if values:FindFirstChild("StaminaValue") then values.StaminaValue.Value = 100 end
+        if values:FindFirstChild("MaxStamina") then values.StaminaValue.Value = values.MaxStamina.Value end
+        
+        -- 2. อนุญาตให้กดวิ่งได้ตลอดเวลา
         if values:FindFirstChild("CanSprint") then values.CanSprint.Value = true end
         if values:FindFirstChild("StaminaDrain") then values.StaminaDrain.Value = 0 end
         if values:FindFirstChild("SprintSlowDown") then values.SprintSlowDown.Value = false end
-    end
 
-    -- 2. ดักจับและล็อคความเร็ว WalkSpeed ของตัวละคร ไม่ให้สคริปต์เกมปรับลดตอนเหนื่อย
-    local character = LocalPlayer.Character
-    if character and character:FindFirstChild("Humanoid") then
-        local humanoid = character.Humanoid
-        -- หากกำลังกดวิ่ง (Sprinting) ให้ล็อคความเร็วไว้ที่ความเร็ววิ่ง (ปกติประมาณ 24-26)
-        if values and values:FindFirstChild("Sprinting") and values.Sprinting.Value == true then
-            humanoid.WalkSpeed = 25
+        -- 3. แก้ปัญหาตัวละครหลุดวิ่ง (Reset Timer / Override Speed)
+        local character = LocalPlayer.Character
+        if character and character:FindFirstChild("Humanoid") then
+            local humanoid = character.Humanoid
+            
+            -- ถ้ากำลังกดวิ่งอยู่ แต่สคริปต์เกมสั่งหยุดวิ่งเอง ให้รีเซ็ตค่าเพื่อกดวิ่งต่อได้ทันที
+            if values:FindFirstChild("IsSprinting") then
+                -- เช็กว่าถ้าความเร็วตกขณะที่ยังกดวิ่ง ให้เปิด CanSprint ซ้ำเพื่อ Bypass ตัวนับเวลา
+                if humanoid.MoveDirection.Magnitude > 0 and values.CanSprint.Value == false then
+                    values.CanSprint.Value = true
+                end
+            end
+            
+            -- ล็อค WalkSpeed ไม่ให้ลดเป็นความเร็วเดินปกติขณะกดวิ่ง
+            if values:FindFirstChild("Sprinting") and values.Sprinting.Value == true then
+                humanoid.WalkSpeed = 25
+            end
         end
     end
 end)
 
-print("Advanced Infinite Stamina Activated!")
+print("Infinite Sprint (Fix Auto-Stop) Activated!")
