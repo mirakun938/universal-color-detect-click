@@ -4,7 +4,7 @@ local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local LocalPlayer = Players.LocalPlayer
 
--- ลบรันเก่าทิ้ง
+-- ลบทิ้งของเก่าถ้าเคยรันไว้
 if CoreGui:FindFirstChild("ScrapESP_Folder") then CoreGui.ScrapESP_Folder:Destroy() end
 if LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("ScrapESP_UI") then LocalPlayer.PlayerGui.ScrapESP_UI:Destroy() end
 
@@ -17,11 +17,20 @@ local espStates = {
     RUSTY = true, METAL = true, PURE_METAL = true
 }
 
--- สถานะการเลือกเศษเหล็กเพื่อเก็บ
 local collectTargets = {
     DIAMOND = false, GOLD = false, NEON = false,
     RUSTY = false, METAL = false, PURE_METAL = false
 }
+
+local autoCollectMode = false
+local collectMethod = "TP" -- "TP" หรือ "TWEEN"
+local isCollecting = false
+
+-- ฟังก์ชันดักจับตัวละครเมื่อเกิดใหม่
+local function getHRP()
+    local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    return char:WaitForChild("HumanoidRootPart", 10)
+end
 
 local function getScrapCategory(name)
     local upper = string.upper(name)
@@ -99,15 +108,10 @@ local function scan()
     end
 end
 scan()
-Workspace.DescendantAdded:Connect(function(obj)
-    if (obj:IsA("Model") or obj:IsA("BasePart")) then task.wait(0.1) applyESP(obj) end
-end)
 
 ----------------------------------------------------
--- ⚡ ฟังก์ชั่นระบบ Teleport / Tween ไปเก็บของ
+-- ⚡ ฟังก์ชั่น Teleport/Tween + Return to Origin
 ----------------------------------------------------
-local isCollecting = false
-
 local function getTargetCFrame(target)
     if target:IsA("BasePart") then return target.CFrame end
     if target:IsA("Model") then
@@ -118,39 +122,71 @@ local function getTargetCFrame(target)
     return nil
 end
 
+local function moveToPosition(hrp, targetCF, mode)
+    if mode == "TP" then
+        hrp.CFrame = targetCF + Vector3.new(0, 2, 0)
+        task.wait(0.2)
+    elseif mode == "TWEEN" then
+        local dist = (hrp.Position - targetCF.Position).Magnitude
+        if dist > 3 then
+            local tweenInfo = TweenInfo.new(dist / 35, Enum.EasingStyle.Linear)
+            local tween = TweenService:Create(hrp, tweenInfo, {CFrame = targetCF + Vector3.new(0, 2, 0)})
+            tween:Play()
+            tween.Completed:Wait()
+            task.wait(0.1)
+        end
+    end
+end
+
 local function collectScraps(mode)
     if isCollecting then return end
     isCollecting = true
 
-    local char = LocalPlayer.Character
-    if not char or not char:FindFirstChild("HumanoidRootPart") then 
-        isCollecting = false 
-        return 
-    end
-    local hrp = char.HumanoidRootPart
+    local hrp = getHRP()
+    if not hrp then isCollecting = false return end
+
+    -- บันทึกจุดเริ่มต้นเดิมไว้ก่อนเดินทาง
+    local originalCFrame = hrp.CFrame
+    local collectedCount = 0
 
     for _, obj in ipairs(Workspace:GetDescendants()) do
+        -- เช็กว่าตัวละครยังไม่ตาย
+        if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("Humanoid") or LocalPlayer.Character.Humanoid.Health <= 0 then
+            break
+        end
+
         local cat = getScrapCategory(obj.Name)
         if cat and collectTargets[cat] and obj.Parent then
             local targetCF = getTargetCFrame(obj)
             if targetCF then
-                if mode == "TP" then
-                    hrp.CFrame = targetCF + Vector3.new(0, 2, 0)
-                    task.wait(0.2)
-                elseif mode == "TWEEN" then
-                    local dist = (hrp.Position - targetCF.Position).Magnitude
-                    local tweenInfo = TweenInfo.new(dist / 30, Enum.EasingStyle.Linear) -- ความเร็ว ลอย 30 studs/sec
-                    local tween = TweenService:Create(hrp, tweenInfo, {CFrame = targetCF + Vector3.new(0, 2, 0)})
-                    tween:Play()
-                    tween.Completed:Wait()
-                    task.wait(0.1)
-                end
+                collectedCount = collectedCount + 1
+                moveToPosition(hrp, targetCF, mode)
             end
         end
-        if not isCollecting then break end
     end
+
+    -- เมื่อเก็บหมดแล้ว ให้เดินทางกลับจุดเดิม (ถ้าตัวละครยังไม่ตาย)
+    if collectedCount > 0 and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") and LocalPlayer.Character.Humanoid.Health > 0 then
+        moveToPosition(hrp, originalCFrame, mode)
+    end
+
     isCollecting = false
 end
+
+-- ดักจับเศษเหล็กเกิดใหม่สำหรับโหมด Auto
+Workspace.DescendantAdded:Connect(function(obj)
+    if (obj:IsA("Model") or obj:IsA("BasePart")) then
+        task.wait(0.1)
+        applyESP(obj)
+        
+        if autoCollectMode and not isCollecting then
+            local cat = getScrapCategory(obj.Name)
+            if cat and collectTargets[cat] then
+                task.spawn(function() collectScraps(collectMethod) end)
+            end
+        end
+    end
+end)
 
 ----------------------------------------------------
 -- 🖥️ UI Control Panel
@@ -162,8 +198,8 @@ screenGui.ResetOnSpawn = false
 screenGui.Parent = playerGui
 
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 220, 0, 360)
-mainFrame.Position = UDim2.new(0.02, 0, 0.25, 0)
+mainFrame.Size = UDim2.new(0, 230, 0, 410)
+mainFrame.Position = UDim2.new(0.02, 0, 0.2, 0)
 mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
 mainFrame.Active = true
 mainFrame.Draggable = true
@@ -202,7 +238,7 @@ local isMinimized = false
 minimizeBtn.MouseButton1Click:Connect(function()
     isMinimized = not isMinimized
     contentFrame.Visible = not isMinimized
-    mainFrame.Size = isMinimized and UDim2.new(0, 220, 0, 35) or UDim2.new(0, 220, 0, 360)
+    mainFrame.Size = isMinimized and UDim2.new(0, 230, 0, 35) or UDim2.new(0, 230, 0, 410)
     minimizeBtn.Text = isMinimized and "+" or "-"
 end)
 
@@ -218,7 +254,6 @@ local categories = {
 for i, cat in ipairs(categories) do
     local yPos = 5 + ((i - 1) * 35)
     
-    -- ปุ่มกดเปิด/ปิด ESP
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(0.65, 0, 0, 30)
     btn.Position = UDim2.new(0.05, 0, 0, yPos)
@@ -239,7 +274,6 @@ for i, cat in ipairs(categories) do
         end
     end)
 
-    -- Checkbox ปุ่มสำหรับเลือกเศษเหล็กที่จะวาร์ปไปเก็บ
     local chkBtn = Instance.new("TextButton")
     chkBtn.Size = UDim2.new(0.22, 0, 0, 30)
     chkBtn.Position = UDim2.new(0.73, 0, 0, yPos)
@@ -253,46 +287,67 @@ for i, cat in ipairs(categories) do
 
     chkBtn.MouseButton1Click:Connect(function()
         collectTargets[cat.ID] = not collectTargets[cat.ID]
-        if collectTargets[cat.ID] then
-            chkBtn.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
-            chkBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        else
-            chkBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
-            chkBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
-        end
+        chkBtn.BackgroundColor3 = collectTargets[cat.ID] and Color3.fromRGB(40, 180, 80) or Color3.fromRGB(60, 60, 70)
+        chkBtn.TextColor3 = collectTargets[cat.ID] and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(200, 200, 200)
     end)
 end
 
--- ปุ่ม Teleport (วาร์ปเก็บ)
+-- ปุ่ม Teleport
 local tpBtn = Instance.new("TextButton")
-tpBtn.Size = UDim2.new(0.42, 0, 0, 35)
+tpBtn.Size = UDim2.new(0.42, 0, 0, 32)
 tpBtn.Position = UDim2.new(0.05, 0, 0, 280)
 tpBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
-tpBtn.Text = "⚡ TELEPORT"
+tpBtn.Text = "⚡ TP ONCE"
 tpBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 tpBtn.Font = Enum.Font.SourceSansBold
-tpBtn.TextSize = 12
+tpBtn.TextSize = 11
 tpBtn.Parent = contentFrame
 Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0, 6)
 
 tpBtn.MouseButton1Click:Connect(function()
+    collectMethod = "TP"
     task.spawn(function() collectScraps("TP") end)
 end)
 
--- ปุ่ม Tween (ลอยไปเก็บ)
+-- ปุ่ม Tween
 local tweenBtn = Instance.new("TextButton")
-tweenBtn.Size = UDim2.new(0.45, 0, 0, 35)
+tweenBtn.Size = UDim2.new(0.45, 0, 0, 32)
 tweenBtn.Position = UDim2.new(0.5, 0, 0, 280)
 tweenBtn.BackgroundColor3 = Color3.fromRGB(50, 120, 180)
-tweenBtn.Text = "✈️ TWEEN (FLY)"
+tweenBtn.Text = "✈️ FLY ONCE"
 tweenBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 tweenBtn.Font = Enum.Font.SourceSansBold
-tweenBtn.TextSize = 12
+tweenBtn.TextSize = 11
 tweenBtn.Parent = contentFrame
 Instance.new("UICorner", tweenBtn).CornerRadius = UDim.new(0, 6)
 
 tweenBtn.MouseButton1Click:Connect(function()
+    collectMethod = "TWEEN"
     task.spawn(function() collectScraps("TWEEN") end)
 end)
 
-print("Scrap Collector (Multi-Select TP/Tween) Ready!")
+-- ปุ่ม AUTO LOOP (เปิด/ปิด โหมดอัตโนมัติ)
+local autoBtn = Instance.new("TextButton")
+autoBtn.Size = UDim2.new(0.9, 0, 0, 35)
+autoBtn.Position = UDim2.new(0.05, 0, 0, 325)
+autoBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 80)
+autoBtn.Text = "🔄 AUTO COLLECT: OFF"
+autoBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+autoBtn.Font = Enum.Font.SourceSansBold
+autoBtn.TextSize = 12
+autoBtn.Parent = contentFrame
+Instance.new("UICorner", autoBtn).CornerRadius = UDim.new(0, 6)
+
+autoBtn.MouseButton1Click:Connect(function()
+    autoCollectMode = not autoCollectMode
+    if autoCollectMode then
+        autoBtn.Text = "🔄 AUTO COLLECT: ON (" .. collectMethod .. ")"
+        autoBtn.BackgroundColor3 = Color3.fromRGB(160, 40, 200)
+        task.spawn(function() collectScraps(collectMethod) end)
+    else
+        autoBtn.Text = "🔄 AUTO COLLECT: OFF"
+        autoBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 80)
+    end
+end)
+
+print("Scrap Auto Collector (Respawn Fix & Return To Origin) Loaded!")
