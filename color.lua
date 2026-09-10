@@ -1,14 +1,13 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
 local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
 
 -- ค่าตั้งค่าระบบ
-local currentMode = "FOLLOW" -- "FOLLOW" หรือ "TELEPORT"
+local currentMode = "TELEPORT" -- "TELEPORT" หรือ "FOLLOW"
 local isFollowing = false
 local currentTarget = nil
 local followDistance = 4
@@ -57,8 +56,10 @@ local function getPlayerFromTarget(targetPart)
     return nil
 end
 
--- 1. ฟังก์ชัน Teleport ด้านหลัง 1 วินาที
-local function triggerTeleportBehind()
+----------------------------------------------------
+-- ⚡ ฟังก์ชัน Teleport Loop ข้างหลัง 1 วินาที แล้วยกเลิก
+----------------------------------------------------
+local function triggerTeleportLoop()
     if not currentTarget or isTeleporting then return end
     
     local myChar = LocalPlayer.Character
@@ -68,27 +69,42 @@ local function triggerTeleportBehind()
     
     if not myHRP or not targetHRP then return end
     
+    -- ตรวจสอบระยะห่าง (ต้องไม่เกิน 30 studs)
     local dist = (myHRP.Position - targetHRP.Position).Magnitude
     if dist > maxTeleportDistance then return end
 
     isTeleporting = true
     
-    -- คำนวณตำแหน่งด้านหลังเป้าหมายพร้อมหันหน้ามองเป้าหมาย
-    local targetBehindCF = targetHRP.CFrame * CFrame.new(0, 0, followDistance)
-    myHRP.CFrame = CFrame.new(targetBehindCF.Position, targetHRP.Position)
+    local startTime = tick()
+    local duration = 1.0 -- ระยะเวลา Loop 1 วินาที
     
-    task.wait(1)
-    isTeleporting = false
+    -- วน Loop วาร์ปซ้ำๆ ไปข้างหลังทุกๆ เฟรมเป็นเวลา 1 วินาที
+    local connection
+    connection = RunService.RenderStepped:Connect(function()
+        local elapsedTime = tick() - startTime
+        
+        -- ตรวจสอบว่ายังไม่หมดเวลา 1 วินาที และตัวละครยังอยู่ครบ
+        if elapsedTime < duration and currentTarget and currentTarget.Character and myHRP and targetHRP then
+            local currentTargetHRP = getHRP(currentTarget.Character)
+            if currentTargetHRP then
+                -- คำนวณตำแหน่งด้านหลังเป้าหมาย พร้อมหันหน้าล็อคเป้า
+                local targetBehindCF = currentTargetHRP.CFrame * CFrame.new(0, 0, followDistance)
+                myHRP.CFrame = CFrame.new(targetBehindCF.Position, currentTargetHRP.Position)
+            end
+        else
+            -- ครบ 1 วินาทีแล้ว ทำการยกเลิก Loop ทันที!
+            connection:Disconnect()
+            isTeleporting = false
+        end
+    end)
 end
 
--- 2. ระบบดักจับการกด C และ Double-Click เลือกเป้าหมาย
+-- ดักจับการกด C และ Double-Click เลือกเป้าหมาย
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     
     if input.KeyCode == Enum.KeyCode.C then
-        if currentMode == "TELEPORT" or currentMode == "FOLLOW" then
-            triggerTeleportBehind()
-        end
+        triggerTeleportLoop()
     end
 
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
@@ -111,7 +127,7 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
     end
 end)
 
--- 3. ระบบติดตาม + Lock On หันหน้าหา Player + ดักทางล่วงหน้า
+-- ระบบติดตามปกติ (สำหรับโหมด FOLLOW)
 RunService.Heartbeat:Connect(function(dt)
     if not isFollowing or isTeleporting or not currentTarget or not currentTarget.Character then return end
     if currentMode ~= "FOLLOW" then return end
@@ -132,7 +148,6 @@ RunService.Heartbeat:Connect(function(dt)
     if yawDelta < -math.pi then yawDelta = yawDelta + (math.pi * 2) end
     lastTargetYaw = currentYaw
 
-    -- คำนวณตำแหน่งดักล่วงหน้า
     local predictOffset = Vector3.new(0, 0, 0)
     if enablePrediction then
         local turnSpeed = yawDelta / math.max(dt, 0.001)
@@ -141,11 +156,8 @@ RunService.Heartbeat:Connect(function(dt)
     end
 
     local targetPosition = (currentCFrame.Position - (currentCFrame.LookVector * followDistance)) + predictOffset
-    
-    -- เคลื่อนที่ไปหาเป้าหมาย
     myHumanoid:MoveTo(targetPosition)
     
-    -- 🎯 LOCK ON: หมุนตัวละครเราให้หันหน้ามอง Player เป้าหมายตลอดเวลา
     local lookAtCFrame = CFrame.new(myHRP.Position, Vector3.new(targetHRP.Position.X, myHRP.Position.Y, targetHRP.Position.Z))
     myHRP.CFrame = myHRP.CFrame:Lerp(lookAtCFrame, 0.2)
 end)
@@ -158,7 +170,7 @@ local function stopFollow()
 end
 
 ----------------------------------------------------
--- 🖥️ UI Control Panel + Mobile Quick Buttons
+-- 🖥️ UI Control Panel
 ----------------------------------------------------
 local playerGui = LocalPlayer:WaitForChild("PlayerGui")
 if playerGui:FindFirstChild("BodyFollow_UI") then playerGui.BodyFollow_UI:Destroy() end
@@ -168,7 +180,7 @@ screenGui.Name = "BodyFollow_UI"
 screenGui.ResetOnSpawn = false
 screenGui.Parent = playerGui
 
--- 🔘 ปุ่มเปิด-ปิด UI หลัก (Toggle Main UI Button)
+-- ปุ่ม Toggle เมนูหลัก
 local toggleUiBtn = Instance.new("TextButton")
 toggleUiBtn.Size = UDim2.new(0, 45, 0, 45)
 toggleUiBtn.Position = UDim2.new(0.02, 0, 0.25, 0)
@@ -180,7 +192,7 @@ toggleUiBtn.TextSize = 11
 toggleUiBtn.Parent = screenGui
 Instance.new("UICorner", toggleUiBtn).CornerRadius = UDim.new(1, 0)
 
--- ⚡ ปุ่มมือถืออย่างรวดเร็ว (Mobile Quick Action Button)
+-- ปุ่มทางลัดมือถือ
 local quickActionBtn = Instance.new("TextButton")
 quickActionBtn.Size = UDim2.new(0, 65, 0, 65)
 quickActionBtn.Position = UDim2.new(0.82, 0, 0.65, 0)
@@ -201,7 +213,6 @@ mainFrame.Draggable = true
 mainFrame.Parent = screenGui
 Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 8)
 
--- สลับ ซ่อน/แสดง UI หลัก
 toggleUiBtn.MouseButton1Click:Connect(function()
     mainFrame.Visible = not mainFrame.Visible
 end)
@@ -233,12 +244,12 @@ _G.UpdateTargetUI = function(name)
     targetLabel.TextColor3 = (name == "None") and Color3.fromRGB(200, 200, 200) or Color3.fromRGB(0, 255, 120)
 end
 
--- 🔀 ปุ่มสลับโหมด Teleport / Follow
+-- ปุ่มสลับโหมด
 local modeBtn = Instance.new("TextButton")
 modeBtn.Size = UDim2.new(0.9, 0, 0, 30)
 modeBtn.Position = UDim2.new(0.05, 0, 0, 60)
-modeBtn.BackgroundColor3 = Color3.fromRGB(140, 50, 200)
-modeBtn.Text = "🔄 MODE: FOLLOW (LOCK ON)"
+modeBtn.BackgroundColor3 = Color3.fromRGB(200, 80, 40)
+modeBtn.Text = "🔄 MODE: TELEPORT LOOP 1s"
 modeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 modeBtn.Font = Enum.Font.SourceSansBold
 modeBtn.TextSize = 11
@@ -246,29 +257,26 @@ modeBtn.Parent = mainFrame
 Instance.new("UICorner", modeBtn).CornerRadius = UDim.new(0, 5)
 
 modeBtn.MouseButton1Click:Connect(function()
-    if currentMode == "FOLLOW" then
-        currentMode = "TELEPORT"
-        modeBtn.Text = "🔄 MODE: TELEPORT ONLY"
-        modeBtn.BackgroundColor3 = Color3.fromRGB(200, 80, 40)
-        quickActionBtn.Text = "⚡ TP"
-        quickActionBtn.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
-    else
+    if currentMode == "TELEPORT" then
         currentMode = "FOLLOW"
         modeBtn.Text = "🔄 MODE: FOLLOW (LOCK ON)"
         modeBtn.BackgroundColor3 = Color3.fromRGB(140, 50, 200)
         quickActionBtn.Text = "🏃 FOLLOW"
         quickActionBtn.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
+    else
+        currentMode = "TELEPORT"
+        modeBtn.Text = "🔄 MODE: TELEPORT LOOP 1s"
+        modeBtn.BackgroundColor3 = Color3.fromRGB(200, 80, 40)
+        quickActionBtn.Text = "⚡ TP"
+        quickActionBtn.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
     end
 end)
 
--- การทำงานของปุ่มทางลัดมือถือ
 quickActionBtn.MouseButton1Click:Connect(function()
-    if currentMode == "TELEPORT" or currentMode == "FOLLOW" then
-        triggerTeleportBehind()
-    end
+    triggerTeleportLoop()
 end)
 
--- ปรับระยะห่าง (Distance Control)
+-- ปุ่มปรับระยะห่าง
 local distLabel = Instance.new("TextLabel")
 distLabel.Size = UDim2.new(0.9, 0, 0, 20)
 distLabel.Position = UDim2.new(0.05, 0, 0, 95)
@@ -311,7 +319,6 @@ plusBtn.MouseButton1Click:Connect(function()
     distLabel.Text = "Follow Distance: " .. followDistance .. " Studs"
 end)
 
--- ปุ่มสลับเปิด-ปิด โหมดดักล่วงหน้า
 local predictBtn = Instance.new("TextButton")
 predictBtn.Size = UDim2.new(0.9, 0, 0, 30)
 predictBtn.Position = UDim2.new(0.05, 0, 0, 150)
@@ -329,7 +336,6 @@ predictBtn.MouseButton1Click:Connect(function()
     predictBtn.BackgroundColor3 = enablePrediction and Color3.fromRGB(40, 150, 90) or Color3.fromRGB(90, 90, 100)
 end)
 
--- ปุ่มหยุดติดตาม
 local unfollowBtn = Instance.new("TextButton")
 unfollowBtn.Size = UDim2.new(0.9, 0, 0, 30)
 unfollowBtn.Position = UDim2.new(0.05, 0, 0, 188)
@@ -345,4 +351,4 @@ unfollowBtn.MouseButton1Click:Connect(function()
     stopFollow()
 end)
 
-print("Advanced Player Follower & Quick Action Loaded!")
+print("Teleport Loop 1s System Loaded!")
