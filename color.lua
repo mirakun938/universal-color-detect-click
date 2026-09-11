@@ -4,44 +4,53 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
 
--- ตั้งค่า Auto Block
 local autoBlockPlayer = true
 local autoBlockNPC = true
-local maxBlockDistance = 12
+local maxBlockDistance = 14
 local isBlocking = false
 local lastBlockTime = 0
-local blockCooldown = 0.5 -- เว้นระยะการกดบล็อกอย่างน้อย 0.5 วินาที
 
--- ฟังก์ชันกดบล็อกแบบปลอดภัย (Safe Block Input)
-local function executeSafeBlock()
+-- ฟังก์ชันบล็อกความเร็วสูง (ยิง ClientBlock ตรงในอาวุธ + จำลองปุ่ม)
+local function executePrecisionBlock()
     local currentTime = tick()
-    if isBlocking or (currentTime - lastBlockTime) < blockCooldown then return end
+    if isBlocking or (currentTime - lastBlockTime) < 0.25 then return end
     
     isBlocking = true
     lastBlockTime = currentTime
 
-    -- วิธีที่ 1: จำลองการกดปุ่ม UI บล็อกบนหน้าจอ (สำหรับ Mobile UI ที่เห็นในวิดีโอ)
+    -- 1. เรียก ClientBlock ของอาวุธที่เราถืออยู่ (ฝั่ง Client สั่งงานทันที ไม่โดน Anti-Cheat เตะ)
+    pcall(function()
+        local char = LocalPlayer.Character
+        if char then
+            local tool = char:FindFirstChildOfClass("Tool")
+            if tool then
+                local manualFuncs = tool:FindFirstChild("ManualFunctions")
+                if manualFuncs and manualFuncs:FindFirstChild("ClientBlock") then
+                    manualFuncs.ClientBlock:Fire()
+                end
+            end
+        end
+    end)
+
+    -- 2. จำลองปุ่ม UI Mobile Block
     pcall(function()
         local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
         local blockBtn = playerGui and playerGui:FindFirstChild("MobileButtons") and playerGui.MobileButtons:FindFirstChild("Block")
         if blockBtn then
             local pos = blockBtn.AbsolutePosition
             local size = blockBtn.AbsoluteSize
-            local clickX = pos.X + (size.X / 2)
-            local clickY = pos.Y + (size.Y / 2) + 36 -- ชดเชยระยะ Topbar
-
-            VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, true, game, 0)
-            task.wait(0.05)
-            VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, false, game, 0)
+            VirtualInputManager:SendMouseButtonEvent(pos.X + (size.X / 2), pos.Y + (size.Y / 2) + 36, 0, true, game, 0)
+            task.wait(0.02)
+            VirtualInputManager:SendMouseButtonEvent(pos.X + (size.X / 2), pos.Y + (size.Y / 2) + 36, 0, false, game, 0)
         end
     end)
 
-    -- วิธีที่ 2: จำลองการกดปุ่ม F (Keyboard Input)
+    -- 3. จำลองการกด F บน KeyBoard
     VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
-    task.wait(0.05)
+    task.wait(0.02)
     VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
 
-    task.wait(0.3)
+    task.wait(0.2)
     isBlocking = false
 end
 
@@ -49,8 +58,8 @@ local function getHRP(char)
     return char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso"))
 end
 
--- ตรวจสอบ Animation การโจมตี
-local function checkTarget(char)
+-- ระบบคำนวณความเร็ว Animation เพื่อหาจังหวะบล็อกที่แม่นยำที่สุด
+local function checkTargetDynamic(char)
     if not char or isBlocking then return end
 
     local myChar = LocalPlayer.Character
@@ -69,44 +78,59 @@ local function checkTarget(char)
     for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
         local animName = string.lower(track.Name)
 
-        -- ท่า Heavy (ง้างช้า)
-        if string.find(animName, "heavy") then
-            task.delay(0.2, function()
-                if not isBlocking and getHRP(char) and (myHRP.Position - getHRP(char).Position).Magnitude <= maxBlockDistance then
-                    executeSafeBlock()
-                end
-            end)
-            break
+        -- ตรวจหาเฉพาะ Animation การโจมตี
+        if string.find(animName, "swing") or string.find(animName, "heavy") or string.find(animName, "attack") or track.Priority == Enum.AnimationPriority.Action then
             
-        -- ท่า Swing หรือ Attack ปกติ
-        elseif string.find(animName, "swing") or string.find(animName, "attack") or track.Priority == Enum.AnimationPriority.Action then
-            executeSafeBlock()
+            -- คำนวณความเร็วของท่าโจมตี (AnimSpeed และ Length)
+            local speed = track.Speed > 0 and track.Speed or 1
+            local duration = track.Length / speed
+            
+            -- คำนวณจุด Impact (จังหวะที่อาวุธฟันมาถึงตัว)
+            local delayTime = 0
+            
+            if string.find(animName, "heavy") then
+                -- ท่า Heavy มักจะฟันโดนช่วง 60% - 70% ของเวลา Animation ทั้งหมด
+                delayTime = math.clamp(duration * 0.55, 0.1, 0.6)
+            else
+                -- ท่า Swing ปกติ มักจะฟันโดนช่วง 20% - 35% ของ Animation
+                delayTime = math.clamp(duration * 0.2, 0, 0.25)
+            end
+
+            -- ถ้าระยะเวลาหน่วงสั้นมาก ให้บล็อกทันที
+            if delayTime <= 0.03 then
+                executePrecisionBlock()
+            else
+                -- ถ้าง้างช้า ให้รอตามระยะเวลาจริงแล้วค่อยกดบล็อก
+                task.delay(delayTime, function()
+                    if not isBlocking and getHRP(char) and (myHRP.Position - getHRP(char).Position).Magnitude <= maxBlockDistance then
+                        executePrecisionBlock()
+                    end
+                end)
+            end
             break
         end
     end
 end
 
--- ลูปตรวจจับแบบประหยัด Resource (รันทุกๆ 0.05 วินาที แทนที่จะเป็นทุกเฟรม)
-task.spawn(function()
-    while task.wait(0.05) do
-        pcall(function()
-            if autoBlockPlayer then
-                for _, player in ipairs(Players:GetPlayers()) do
-                    if player ~= LocalPlayer and player.Character then
-                        checkTarget(player.Character)
-                    end
+-- ลูปตรวจจับความถี่สูง (รันทุกเฟรม RenderStepped เพื่อความไวสูงสุด)
+game:GetService("RunService").RenderStepped:Connect(function()
+    pcall(function()
+        if autoBlockPlayer then
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= LocalPlayer and player.Character then
+                    checkTargetDynamic(player.Character)
                 end
             end
+        end
 
-            if autoBlockNPC then
-                for _, obj in ipairs(Workspace:GetChildren()) do
-                    if obj:IsA("Model") and not Players:GetPlayerFromCharacter(obj) and obj:FindFirstChildOfClass("Humanoid") then
-                        checkTarget(obj)
-                    end
+        if autoBlockNPC then
+            for _, obj in ipairs(Workspace:GetChildren()) do
+                if obj:IsA("Model") and not Players:GetPlayerFromCharacter(obj) and obj:FindFirstChildOfClass("Humanoid") then
+                    checkTargetDynamic(obj)
                 end
             end
-        end)
-    end
+        end
+    end)
 end)
 
-print("Safe Auto Block Loaded!")
+print("Dynamic Speed Auto Block Loaded!")
