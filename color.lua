@@ -3,24 +3,29 @@ local Players = game:GetService("Players")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local Workspace = game:GetService("Workspace")
 
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
 local animationsFolder = ReplicatedStorage:WaitForChild("Animations", 5)
 local qteRemote = animationsFolder and animationsFolder:WaitForChild("QTE", 5) or ReplicatedStorage:FindFirstChild("QTE", true)
 
 local isProcessing = false
 
--- ฟังก์ชันจำลอง Tap คลิกกลางหน้าจอ (สำหรับปลดล็อก QTE Stage แรก)
+-- หน่วงเวลาจังหวะ Perfect (ปรับจูนตามความเหมาะสม)
+local PERFECT_TAP_DELAY = 0.18
+local STAGE2_KEY_DELAY = 0.12
+
+-- ฟังก์ชันจำลอง Tap หน้าจอ
 local function simulateTap()
     pcall(function()
         local viewport = Workspace.CurrentCamera.ViewportSize
-        local clickX = viewport.X / 2
-        local clickY = viewport.Y / 2
-        VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, true, game, 0)
+        VirtualInputManager:SendMouseButtonEvent(viewport.X / 2, viewport.Y / 2, 0, true, game, 0)
         task.wait(0.02)
-        VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, false, game, 0)
+        VirtualInputManager:SendMouseButtonEvent(viewport.X / 2, viewport.Y / 2, 0, false, game, 0)
     end)
 end
 
--- ฟังก์ชันส่งสัญญาณกด Keybind
+-- ฟังก์ชันจำลองการกดปุ่ม Keybind บนคีย์บอร์ด
 local function pressKey(keyCode)
     pcall(function()
         VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
@@ -29,27 +34,49 @@ local function pressKey(keyCode)
     end)
 end
 
+-- ตรวจหาตัวอักษรที่ขึ้นบน UI หน้าจอ (A หรือ E)
+local function detectActiveKey()
+    for _, gui in ipairs(PlayerGui:GetChildren()) do
+        if gui:IsA("ScreenGui") and gui.Enabled then
+            for _, desc in ipairs(gui:GetDescendants()) do
+                if desc:IsA("TextLabel") and desc.Visible then
+                    local text = string.upper(string.gsub(desc.Text, "%s+", ""))
+                    if text == "A" or text == "E" then
+                        return Enum.KeyCode[text]
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
 if qteRemote and qteRemote:IsA("RemoteEvent") then
-    print("Multi-Key Auto QTE System Active!")
+    print("Multi-Key Auto QTE (A/E Supported) Loaded!")
     
     qteRemote.OnClientEvent:Connect(function(...)
         if isProcessing then return end
         isProcessing = true
         
-        -- 1. Tap 1 ครั้ง + ส่ง Remote true เพื่อ Trigger เปลี่ยนเป็น Keybind Mode
+        -- Stage 1: Tap ในจังหวะ Perfect
+        task.wait(PERFECT_TAP_DELAY)
         simulateTap()
         pcall(function() qteRemote:FireServer(true) end)
         
-        task.wait(0.06)
+        -- Stage 2: สลับเข้าสู่โหมด Keybind
+        task.wait(STAGE2_KEY_DELAY)
         
-        -- 2. รัวกด Keybind (ทั้ง A และ E) เพื่อรองรับปุ่มใหม่
-        for i = 1, 3 do
+        local detectedKey = detectActiveKey()
+        if detectedKey then
+            pressKey(detectedKey)
+        else
+            -- หากอ่าน UI ไม่ทัน สั่งกดทั้ง A และ E สำรองไว้
             pressKey(Enum.KeyCode.A)
+            task.wait(0.02)
             pressKey(Enum.KeyCode.E)
-            task.wait(0.03)
         end
         
-        task.wait(0.2)
+        task.wait(0.4)
         isProcessing = false
     end)
 end
