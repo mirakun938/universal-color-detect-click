@@ -1,77 +1,48 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
-local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
+-- ค้นหา Remote Event จาก ReplicatedStorage
 local animationsFolder = ReplicatedStorage:WaitForChild("Animations", 5)
 local qteRemote = animationsFolder and animationsFolder:WaitForChild("QTE", 5) or ReplicatedStorage:FindFirstChild("QTE", true)
 
 local isProcessing = false
 
--- ฟังก์ชันค้นหาและดึงปุ่ม Keybind ที่ขึ้นมาบน GUI จริง
-local function getActiveQTEKey()
-    for _, gui in ipairs(PlayerGui:GetChildren()) do
-        if gui:IsA("ScreenGui") and gui.Enabled then
-            for _, desc in ipairs(gui:GetDescendants()) do
-                if desc:IsA("TextLabel") and desc.Visible then
-                    local text = string.upper(string.gsub(desc.Text, "%s+", ""))
-                    -- ค้นหาตัวอักษรคีย์บอร์ด (เช่น E, Q, R, F, Z, X, C)
-                    if #text == 1 and string.match(text, "[A-Z1-9]") then
-                        local keyCode = Enum.KeyCode[text]
-                        if keyCode then
-                            return keyCode
-                        end
-                    end
-                end
-            end
-        end
-    end
-    return Enum.KeyCode.E -- Default fallback หากหาไม่เจอ ให้กด E
-end
-
--- ฟังก์ชันรันการกด Keybind
-local function pressKey(keyCode)
-    VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
-    task.wait(0.03)
-    VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
-end
-
--- 1. ดักจับจาก RemoteEvent
-if qteRemote and qteRemote:IsA("RemoteEvent") then
-    qteRemote.OnClientEvent:Connect(function(...)
-        if isProcessing then return end
-        isProcessing = true
-
-        -- ส่งสัญญาณ Server
-        task.wait(0.04)
-        pcall(function() qteRemote:FireServer(true) end)
-
-        -- ตรวจหาและกดปุ่ม Keybind (เช่น ปุ่ม E)
-        local targetKey = getActiveQTEKey()
-        pressKey(targetKey)
-
-        task.wait(0.3)
-        isProcessing = false
+-- ฟังก์ชันจำลองการกดปุ่ม E บน คีย์บอร์ด/ระบบ
+local function pressEKey()
+    pcall(function()
+        -- กดปุ่ม E
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+        task.wait(0.03)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
     end)
 end
 
--- 2. ดักจับ GUI ที่โผล่ขึ้นมาทันที (สำรองเผื่อ Remote ไม่ส่ง ClientEvent)
-PlayerGui.ChildAdded:Connect(function(gui)
-    task.wait(0.02)
-    if not isProcessing and (string.find(string.lower(gui.Name), "qte") or string.find(string.lower(gui.Name), "key")) then
+if qteRemote and qteRemote:IsA("RemoteEvent") then
+    print("Direct E-Key Auto QTE Ready!")
+    
+    qteRemote.OnClientEvent:Connect(function(...)
+        if isProcessing then return end
         isProcessing = true
         
-        if qteRemote then pcall(function() qteRemote:FireServer(true) end) end
+        -- 1. หน่วงเวลาเล็กน้อยเพื่อหลบ Anti-Cheat
+        task.wait(0.04)
         
-        local targetKey = getActiveQTEKey()
-        pressKey(targetKey)
+        -- 2. ส่งค่า true ไปหาเซิร์ฟเวอร์โดยตรง
+        pcall(function()
+            qteRemote:FireServer(true)
+        end)
+        
+        -- 3. สั่งกดปุ่ม E ทันที 2 ครั้งติดกันเพื่อความแน่นอน
+        pressEKey()
+        task.wait(0.05)
+        pressEKey()
         
         task.wait(0.3)
         isProcessing = false
-    end
-end)
-
-print("Smart Keybind Auto QTE Loaded!")
+    end)
+else
+    warn("ไม่พบ QTE RemoteEvent")
+end
