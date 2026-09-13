@@ -1,78 +1,51 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Players = game:GetService("Players")
-local VirtualInputManager = game:GetService("VirtualInputManager")
-local Workspace = game:GetService("Workspace")
+local qteRemote = ReplicatedStorage:FindFirstChild("Animations") and ReplicatedStorage.Animations:FindFirstChild("QTE") 
+                  or ReplicatedStorage:FindFirstChild("QTE", true)
 
-local LocalPlayer = Players.LocalPlayer
-local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+-- 1. Hook Remote Event (บังคับให้ Client ส่งค่า True เสมอ)
+if qteRemote and qteRemote:IsA("RemoteEvent") then
+    local oldFireServer
+    oldFireServer = hookmetamethod(game, "__namecall", function(self, ...)
+        local method = getnamecallmethod()
+        local args = {...}
 
-local animationsFolder = ReplicatedStorage:WaitForChild("Animations", 5)
-local qteRemote = animationsFolder and animationsFolder:WaitForChild("QTE", 5) or ReplicatedStorage:FindFirstChild("QTE", true)
+        if self == qteRemote and (method == "FireServer" or method == "fireServer") then
+            -- บังคับเปลี่ยน Argument เป็น true ทุกครั้งที่ยิง Event
+            return oldFireServer(self, true)
+        end
 
-local isProcessing = false
+        return oldFireServer(self, ...)
+    end)
+end
 
--- ปรับแต่งค่า Timing จังหวะ Perfect
-local PERFECT_TAP_DELAY = 0.18   -- หน่วงเวลาจังหวะ Tap
-local STAGE2_KEY_DELAY = 0.12   -- หน่วงเวลาจังหวะ Keybind
-
--- ฟังก์ชันสแกนหาปุ่ม Keybind บนหน้าจอ (A, D, E ฯลฯ)
-local function getActiveKeycode()
-    pcall(function()
-        for _, gui in ipairs(PlayerGui:GetChildren()) do
-            if gui:IsA("ScreenGui") and gui.Enabled then
-                for _, desc in ipairs(gui:GetDescendants()) do
-                    if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Visible then
-                        local text = string.upper(string.gsub(desc.Text, "%s+", ""))
-                        -- ตรวจจับตัวอักษรเดี่ยว เช่น A, D, E
-                        if #text == 1 and string.match(text, "[A-Z1-9]") then
-                            local keyCode = Enum.KeyCode[text]
-                            if keyCode then return keyCode end
+-- 2. Hook ModuleScript QTEHandler (ถ้า Executor รองรับ require/hookfunction)
+pcall(function()
+    local qteHandlerModule = ReplicatedStorage:FindFirstChild("QTEHandler", true)
+    if qteHandlerModule and getloadedmodules then
+        for _, module in ipairs(getloadedmodules()) do
+            if module == qteHandlerModule or module.Name == "QTEHandler" then
+                local succ, table = pcall(require, module)
+                if succ and type(table) == "table" then
+                    -- ปรับเปลี่ยนฟังก์ชันภายในให้ตอบกลับเป็น Win/Success 100%
+                    for key, val in pairs(table) do
+                        if type(val) == "function" then
+                            table[key] = function(...)
+                                return true
+                            end
                         end
                     end
                 end
             end
         end
-    end)
-    return Enum.KeyCode.E -- ค่าสำรองถ้าสแกนไม่เจอ
-end
+    end
+end)
 
--- ฟังก์ชันกดปุ่มตาม KeyCode ที่ได้รับ
-local function pressKey(keyCode)
-    pcall(function()
-        VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
-        task.wait(0.03)
-        VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
-    end)
-end
-
--- ฟังก์ชัน Tap หน้าจอ
-local function simulateTap()
-    pcall(function()
-        local viewport = Workspace.CurrentCamera.ViewportSize
-        VirtualInputManager:SendMouseButtonEvent(viewport.X / 2, viewport.Y / 2, 0, true, game, 0)
-        task.wait(0.03)
-        VirtualInputManager:SendMouseButtonEvent(viewport.X / 2, viewport.Y / 2, 0, false, game, 0)
-    end)
-end
-
-if qteRemote and qteRemote:IsA("RemoteEvent") then
-    print("Multi-Key Auto QTE (A/D/E) Loaded!")
-    
+-- 3. Auto Response เมื่อได้รับการแจ้งเตือน QTE จากเซิร์ฟเวอร์
+if qteRemote then
     qteRemote.OnClientEvent:Connect(function(...)
-        if isProcessing then return end
-        isProcessing = true
-        
-        -- Stage 1: Tap จังหวะแรก
-        task.wait(PERFECT_TAP_DELAY)
-        simulateTap()
-        pcall(function() qteRemote:FireServer(true) end)
-        
-        -- Stage 2: สแกนหาปุ่ม A / D / E แล้วกดตามปุ่มที่ขึ้นบนจอ
-        task.wait(STAGE2_KEY_DELAY)
-        local keyToPress = getActiveKeycode()
-        pressKey(keyToPress)
-        
-        task.wait(0.4)
-        isProcessing = false
+        task.wait(0.05)
+        qteRemote:FireServer(true)
     end)
 end
+
+print("100% Guaranteed QTE Win Loaded!")
