@@ -1,79 +1,79 @@
 local Workspace = game:GetService("Workspace")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
 local aiFolder = Workspace:WaitForChild("ai", 10)
 
-local HEAD_SIZE = Vector3.new(15, 15, 15) -- ขนาดความกว้าง x ยาว x สูง
-local HEAD_TRANSPARENCY = 0.6            -- ความโปร่งใส (0 = ทึบ, 1 = ล่องหน)
+-- ตั้งค่า Silent Aim
+local FOV_RADIUS = 150 -- ระยะวงเป้าล็อก (พิกเซลบนหน้าจอมือถือ)
+local TARGET_PART = "Head" -- ล็อกเป้าที่หัว
 
--- ฟังก์ชันสำหรับซ่อน/คืนค่า Hitbox เมื่อ Zombie ตาย
-local function clearHeadHitbox(head)
-    pcall(function()
-        head.Size = Vector3.new(1.2, 1.2, 1.2)
-        head.Transparency = 1
-        head.CanCollide = false
-    end)
-end
+-- ค้นหา AI ที่ใกล้จุดศูนย์กลางหน้าจอที่สุด
+local function getClosestAI()
+    local closestTarget = nil
+    local shortestDistance = FOV_RADIUS
+    local viewportCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
 
-local function applyHitboxToHead(head)
-    if not head:IsA("BasePart") then return end
-    
-    -- ขยายขนาดส่วนหัว
-    head.Size = HEAD_SIZE
-    head.Transparency = HEAD_TRANSPARENCY
-    head.BrickColor = BrickColor.new("Really red")
-    head.Material = Enum.Material.Neon
-    head.CanCollide = false
+    if not aiFolder then return nil end
 
-    -- ตรวจหา Humanoid ในโมเดลเพื่อดักจับการตาย
-    local model = head:FindFirstAncestorOfClass("Model")
-    if model then
-        local humanoid = model:FindFirstChildOfClass("Humanoid")
-        
-        if humanoid then
-            -- หากเลือดหมดแล้ว ให้ซ่อน Hitbox ทันที
-            if humanoid.Health <= 0 then
-                clearHeadHitbox(head)
-                return
-            end
-            
-            -- ดักจับจังหวะที่เลือดลดจนเหลือ 0 (ตาย)
-            local healthConn
-            healthConn = humanoid:GetPropertyChangedSignal("Health"):Connect(function()
-                if humanoid.Health <= 0 then
-                    clearHeadHitbox(head)
-                    if healthConn then healthConn:Disconnect() end
+    for _, model in ipairs(aiFolder:GetChildren()) do
+        if model:IsA("Model") then
+            local humanoid = model:FindFirstChildOfClass("Humanoid")
+            local targetPart = model:FindFirstChild(TARGET_PART) or model:FindFirstChild("HumanoidRootPart")
+
+            -- เช็คว่า AI ยังมีชีวิตอยู่
+            if targetPart and (not humanoid or humanoid.Health > 0) then
+                local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+
+                if onScreen then
+                    local mouseDistance = (Vector2.new(screenPos.X, screenPos.Y) - viewportCenter).Magnitude
+                    if mouseDistance < shortestDistance then
+                        shortestDistance = mouseDistance
+                        closestTarget = targetPart
+                    end
                 end
-            end)
-        end
-        
-        -- ดักจับกรณีที่โมเดล Zombie ถูกลบออกจาก Workspace (Destroy)
-        local removeConn
-        removeConn = model.AncestryChanged:Connect(function(_, parent)
-            if not parent then
-                clearHeadHitbox(head)
-                if removeConn then removeConn:Disconnect() end
             end
-        end)
+        end
     end
+    return closestTarget
 end
 
--- สแกนชิ้นส่วนในโฟลเดอร์ ai
-local function processDescendant(descendant)
-    if descendant:IsA("BasePart") and string.find(string.lower(descendant.Name), "head") then
-        applyHitboxToHead(descendant)
+-- Hook การล็อกเป้า (Raycast / Mouse Target)
+local oldNamecall
+oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+    local method = getnamecallmethod()
+    local args = {...}
+
+    if not checkcaller() and (method == "Raycast" or method == "FindPartOnWithIgnoreList" or method == "findPartOnWithIgnoreList") then
+        local target = getClosestAI()
+        if target then
+            -- ปรับทิศทางกระสุนพุ่งตรงเข้าหัว AI เป้าหมายทันที
+            if method == "Raycast" and args[1] and args[2] then
+                local origin = args[1]
+                args[2] = (target.Position - origin).Unit * 1000
+                return oldNamecall(self, unpack(args))
+            end
+        end
     end
-end
 
-if aiFolder then
-    print("Auto-Clean Dynamic Head Hitbox Loaded!")
+    return oldNamecall(self, ...)
+end)
 
-    -- 1. สแกน AI ทุกตัวที่มีอยู่ในโฟลเดอร์ ai ปัจจุบัน
-    for _, desc in ipairs(aiFolder:GetDescendants()) do
-        processDescendant(desc)
+-- Hook ตำแหน่ง CFrame ของกล้อง/เมาส์ (สำหรับปืนที่ใช้ Mouse.Hit)
+local oldIndex
+oldIndex = hookmetamethod(game, "__index", function(self, index)
+    if not checkcaller() and self:IsA("Mouse") and (index == "Hit" or index == "Target") then
+        local target = getClosestAI()
+        if target then
+            if index == "Hit" then
+                return target.CFrame
+            elseif index == "Target" then
+                return target
+            end
+        end
     end
+    return oldIndex(self, index)
+end)
 
-    -- 2. ดักจับ AI ตัวใหม่ที่เพิ่งเกิด (Spawn)
-    aiFolder.DescendantAdded:Connect(function(desc)
-        task.wait(0.05)
-        processDescendant(desc)
-    end)
-end
+print("Mobile Silent Aim Loaded Successfully!")
