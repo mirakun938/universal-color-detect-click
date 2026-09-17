@@ -1,15 +1,16 @@
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
-
 local aiFolder = Workspace:WaitForChild("ai", 10)
 
--- ตั้งค่า Silent Aim
-local FOV_RADIUS = 300 -- ระยะวงเป้าล็อกบนหน้าจอมือถือ (ยิ่งเยอะยิ่งล็อกง่าย)
-local TARGET_PART = "Head" -- ล็อกเป้าที่หัว
+-- ตั้งค่า Silent Aim & Camera Lock
+local FOV_RADIUS = 500 -- รัศมีวงเป้าดักจับ (พิกเซล)
+local TARGET_PART = "Head"
 
--- ฟังก์ชันค้นหาหัว AI ที่ใกล้ศูนย์กลางหน้าจอที่สุด และยังมีชีวิตอยู่
+-- ฟังก์ชันค้นหาหัว Zombie ที่ใกล้เป้าเล็งที่สุดและยังไม่ตาย
 local function getClosestZombieHead()
     local closestHead = nil
     local shortestDistance = FOV_RADIUS
@@ -22,7 +23,7 @@ local function getClosestZombieHead()
             local humanoid = model:FindFirstChildOfClass("Humanoid")
             local head = model:FindFirstChild(TARGET_PART) or model:FindFirstChild("HumanoidRootPart")
 
-            -- เช็คว่ามีหัว และ AI เลือดมากกว่า 0 (ยังไม่ตาย)
+            -- เช็คว่า AI เลือดมากกว่า 0 (ยังไม่ตาย)
             if head and (not humanoid or humanoid.Health > 0) then
                 local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
 
@@ -39,37 +40,33 @@ local function getClosestZombieHead()
     return closestHead
 end
 
--- Hook RemoteEvent:FireServer สำหรับระบบปืน
-local oldNamecall
-oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-    local method = getnamecallmethod()
-    local args = {...}
-
-    if not checkcaller() and (method == "FireServer" or method == "fireServer") then
+-- 1. Hook Camera CFrame (หลอกระบบคำนวณ Raycast / Auto Fire ของเกม)
+local oldIndex
+oldIndex = hookmetamethod(game, "__index", function(self, index)
+    if not checkcaller() and self == Camera and index == "CFrame" then
         local targetHead = getClosestZombieHead()
-        
         if targetHead then
-            -- แอบดึงตำแหน่ง Vector3 หรือ CFrame ใน Argument ของ Remote ปืน แล้วแก้เป็นตำแหน่งหัว AI
-            for i, arg in ipairs(args) do
-                if typeof(arg) == "Vector3" then
-                    args[i] = targetHead.Position
-                elseif typeof(arg) == "CFrame" then
-                    args[i] = targetHead.CFrame
-                elseif type(arg) == "table" then
-                    for k, v in pairs(arg) do
-                        if typeof(v) == "Vector3" then
-                            arg[k] = targetHead.Position
-                        elseif typeof(v) == "CFrame" then
-                            arg[k] = targetHead.CFrame
-                        end
-                    end
-                end
-            end
-            return oldNamecall(self, unpack(args))
+            -- ปรับมุมกล้องจำลองให้หันตรงเข้าหัว Zombie ทันทีในระดับ Script เกม
+            return CFrame.new(Camera.CFrame.Position, targetHead.Position)
         end
     end
-
-    return oldNamecall(self, ...)
+    return oldIndex(self, index)
 end)
 
-print("Universal Remote Silent Aim Loaded!")
+-- 2. Hook Mouse.Hit & Target (รองรับระบบกดหรือล็อกเป้าผ่าน Mouse)
+local oldMouseIndex
+oldMouseIndex = hookmetamethod(game, "__index", function(self, index)
+    if not checkcaller() and self:IsA("Mouse") and (index == "Hit" or index == "Target") then
+        local targetHead = getClosestZombieHead()
+        if targetHead then
+            if index == "Hit" then
+                return targetHead.CFrame
+            elseif index == "Target" then
+                return targetHead
+            end
+        end
+    end
+    return oldIndex(self, index)
+end)
+
+print("Camera Hook Silent Aim for Auto-Shoot Loaded!")
