@@ -6,12 +6,12 @@ local Camera = Workspace.CurrentCamera
 local aiFolder = Workspace:WaitForChild("ai", 10)
 
 -- ตั้งค่า Silent Aim
-local FOV_RADIUS = 150 -- ระยะวงเป้าล็อก (พิกเซลบนหน้าจอมือถือ)
+local FOV_RADIUS = 300 -- ระยะวงเป้าล็อกบนหน้าจอมือถือ (ยิ่งเยอะยิ่งล็อกง่าย)
 local TARGET_PART = "Head" -- ล็อกเป้าที่หัว
 
--- ค้นหา AI ที่ใกล้จุดศูนย์กลางหน้าจอที่สุด
-local function getClosestAI()
-    local closestTarget = nil
+-- ฟังก์ชันค้นหาหัว AI ที่ใกล้ศูนย์กลางหน้าจอที่สุด และยังมีชีวิตอยู่
+local function getClosestZombieHead()
+    local closestHead = nil
     local shortestDistance = FOV_RADIUS
     local viewportCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
 
@@ -20,60 +20,56 @@ local function getClosestAI()
     for _, model in ipairs(aiFolder:GetChildren()) do
         if model:IsA("Model") then
             local humanoid = model:FindFirstChildOfClass("Humanoid")
-            local targetPart = model:FindFirstChild(TARGET_PART) or model:FindFirstChild("HumanoidRootPart")
+            local head = model:FindFirstChild(TARGET_PART) or model:FindFirstChild("HumanoidRootPart")
 
-            -- เช็คว่า AI ยังมีชีวิตอยู่
-            if targetPart and (not humanoid or humanoid.Health > 0) then
-                local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+            -- เช็คว่ามีหัว และ AI เลือดมากกว่า 0 (ยังไม่ตาย)
+            if head and (not humanoid or humanoid.Health > 0) then
+                local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
 
                 if onScreen then
-                    local mouseDistance = (Vector2.new(screenPos.X, screenPos.Y) - viewportCenter).Magnitude
-                    if mouseDistance < shortestDistance then
-                        shortestDistance = mouseDistance
-                        closestTarget = targetPart
+                    local dist = (Vector2.new(screenPos.X, screenPos.Y) - viewportCenter).Magnitude
+                    if dist < shortestDistance then
+                        shortestDistance = dist
+                        closestHead = head
                     end
                 end
             end
         end
     end
-    return closestTarget
+    return closestHead
 end
 
--- Hook การล็อกเป้า (Raycast / Mouse Target)
+-- Hook RemoteEvent:FireServer สำหรับระบบปืน
 local oldNamecall
 oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
 
-    if not checkcaller() and (method == "Raycast" or method == "FindPartOnWithIgnoreList" or method == "findPartOnWithIgnoreList") then
-        local target = getClosestAI()
-        if target then
-            -- ปรับทิศทางกระสุนพุ่งตรงเข้าหัว AI เป้าหมายทันที
-            if method == "Raycast" and args[1] and args[2] then
-                local origin = args[1]
-                args[2] = (target.Position - origin).Unit * 1000
-                return oldNamecall(self, unpack(args))
+    if not checkcaller() and (method == "FireServer" or method == "fireServer") then
+        local targetHead = getClosestZombieHead()
+        
+        if targetHead then
+            -- แอบดึงตำแหน่ง Vector3 หรือ CFrame ใน Argument ของ Remote ปืน แล้วแก้เป็นตำแหน่งหัว AI
+            for i, arg in ipairs(args) do
+                if typeof(arg) == "Vector3" then
+                    args[i] = targetHead.Position
+                elseif typeof(arg) == "CFrame" then
+                    args[i] = targetHead.CFrame
+                elseif type(arg) == "table" then
+                    for k, v in pairs(arg) do
+                        if typeof(v) == "Vector3" then
+                            arg[k] = targetHead.Position
+                        elseif typeof(v) == "CFrame" then
+                            arg[k] = targetHead.CFrame
+                        end
+                    end
+                end
             end
+            return oldNamecall(self, unpack(args))
         end
     end
 
     return oldNamecall(self, ...)
 end)
 
--- Hook ตำแหน่ง CFrame ของกล้อง/เมาส์ (สำหรับปืนที่ใช้ Mouse.Hit)
-local oldIndex
-oldIndex = hookmetamethod(game, "__index", function(self, index)
-    if not checkcaller() and self:IsA("Mouse") and (index == "Hit" or index == "Target") then
-        local target = getClosestAI()
-        if target then
-            if index == "Hit" then
-                return target.CFrame
-            elseif index == "Target" then
-                return target
-            end
-        end
-    end
-    return oldIndex(self, index)
-end)
-
-print("Mobile Silent Aim Loaded Successfully!")
+print("Universal Remote Silent Aim Loaded!")
