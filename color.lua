@@ -1,72 +1,65 @@
 local Workspace = game:GetService("Workspace")
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
+local enemiesFolder = Workspace:WaitForChild("Enemies", 10)
 
-local LocalPlayer = Players.LocalPlayer
-local Camera = Workspace.CurrentCamera
-local aiFolder = Workspace:WaitForChild("ai", 10)
+-- การตั้งค่า Hitbox ยานพาหนะ
+local VEHICLE_HITBOX_SIZE = Vector3.new(30, 30, 30) -- ขนาดความกว้าง x ยาว x สูง (ปรับได้)
+local HITBOX_TRANSPARENCY = 0.6                     -- ความโปร่งใส (0 = ทึบ, 1 = ล่องหน)
 
--- ตั้งค่า Silent Aim & Camera Lock
-local FOV_RADIUS = 500 -- รัศมีวงเป้าดักจับ (พิกเซล)
-local TARGET_PART = "Head"
+local function expandVehicleHitbox(model)
+    if not model:IsA("Model") then return end
+    
+    task.wait(0.1) -- รอให้ Part ภายในยานพาหนะโหลดสมบูรณ์
 
--- ฟังก์ชันค้นหาหัว Zombie ที่ใกล้เป้าเล็งที่สุดและยังไม่ตาย
-local function getClosestZombieHead()
-    local closestHead = nil
-    local shortestDistance = FOV_RADIUS
-    local viewportCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-
-    if not aiFolder then return nil end
-
-    for _, model in ipairs(aiFolder:GetChildren()) do
-        if model:IsA("Model") then
-            local humanoid = model:FindFirstChildOfClass("Humanoid")
-            local head = model:FindFirstChild(TARGET_PART) or model:FindFirstChild("HumanoidRootPart")
-
-            -- เช็คว่า AI เลือดมากกว่า 0 (ยังไม่ตาย)
-            if head and (not humanoid or humanoid.Health > 0) then
-                local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
-
-                if onScreen then
-                    local dist = (Vector2.new(screenPos.X, screenPos.Y) - viewportCenter).Magnitude
-                    if dist < shortestDistance then
-                        shortestDistance = dist
-                        closestHead = head
-                    end
-                end
+    -- 1. หา ชิ้นส่วนหลัก (PrimaryPart / Hitbox Part)
+    local targetPart = model.PrimaryPart 
+        or model:FindFirstChild("HumanoidRootPart") 
+        or model:FindFirstChildOfClass("VehicleSeat") 
+        or model:FindFirstChildOfClass("Seat")
+    
+    -- 2. ถ้าไม่เจอ Part หลัก ให้ดึง BasePart ชิ้นแรกในโมเดลมาใช้แทน
+    if not targetPart then
+        for _, desc in ipairs(model:GetDescendants()) do
+            if desc:IsA("BasePart") then
+                targetPart = desc
+                break
             end
         end
     end
-    return closestHead
+
+    -- 3. ทำการขยาย Hitbox
+    if targetPart and targetPart:IsA("BasePart") then
+        targetPart.Size = VEHICLE_HITBOX_SIZE
+        targetPart.Transparency = HITBOX_TRANSPARENCY
+        targetPart.BrickColor = BrickColor.new("Bright blue") -- สีฟ้าเนออน
+        targetPart.Material = Enum.Material.Neon
+        targetPart.CanCollide = false
+        targetPart.CanQuery = true
+
+        -- ดักจับเมื่อ Humanoid ของยานพาหนะตาย (ถ้ามี)
+        local humanoid = model:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            local diedConn
+            diedConn = humanoid.Died:Connect(function()
+                targetPart.Size = Vector3.new(1, 1, 1)
+                targetPart.Transparency = 1
+                if diedConn then diedConn:Disconnect() end
+            end)
+        end
+    end
 end
 
--- 1. Hook Camera CFrame (หลอกระบบคำนวณ Raycast / Auto Fire ของเกม)
-local oldIndex
-oldIndex = hookmetamethod(game, "__index", function(self, index)
-    if not checkcaller() and self == Camera and index == "CFrame" then
-        local targetHead = getClosestZombieHead()
-        if targetHead then
-            -- ปรับมุมกล้องจำลองให้หันตรงเข้าหัว Zombie ทันทีในระดับ Script เกม
-            return CFrame.new(Camera.CFrame.Position, targetHead.Position)
-        end
-    end
-    return oldIndex(self, index)
-end)
+if enemiesFolder then
+    print("Enemies Vehicle Hitbox Expander Loaded!")
 
--- 2. Hook Mouse.Hit & Target (รองรับระบบกดหรือล็อกเป้าผ่าน Mouse)
-local oldMouseIndex
-oldMouseIndex = hookmetamethod(game, "__index", function(self, index)
-    if not checkcaller() and self:IsA("Mouse") and (index == "Hit" or index == "Target") then
-        local targetHead = getClosestZombieHead()
-        if targetHead then
-            if index == "Hit" then
-                return targetHead.CFrame
-            elseif index == "Target" then
-                return targetHead
-            end
-        end
+    -- 1. สแกนยานพาหนะ/ศัตรูที่มีอยู่ในโฟลเดอร์ Enemies ณ ปัจจุบัน
+    for _, child in ipairs(enemiesFolder:GetChildren()) do
+        expandVehicleHitbox(child)
     end
-    return oldIndex(self, index)
-end)
 
-print("Camera Hook Silent Aim for Auto-Shoot Loaded!")
+    -- 2. ดักจับเมื่อมียานพาหนะใหม่เกิดเข้ามาในโฟลเดอร์ Enemies
+    enemiesFolder.ChildAdded:Connect(function(newVehicle)
+        expandVehicleHitbox(newVehicle)
+    end)
+else
+    warn("ไม่พบโฟลเดอร์ 'Enemies' ใน Workspace")
+end
