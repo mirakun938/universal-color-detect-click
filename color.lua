@@ -1,29 +1,44 @@
 local Workspace = game:GetService("Workspace")
 local enemiesFolder = Workspace:WaitForChild("Enemies", 10)
 
--- ขนาดตัวคูณของยานพาหนะ ( multiplier เช่น 2.5x หรือ 3x ของขนาดเดิม )
 local SCALE_FACTOR = Vector3.new(3, 3, 3) 
-local HITBOX_TRANSPARENCY = 0.5 -- ความโปร่งใส (0 = ทึบ, 1 = ล่องหน)
+local HITBOX_TRANSPARENCY = 0.5
 
-local function expandVehicleParts(model)
-    if not model:IsA("Model") then return end
+-- ฟังก์ชันเช็คว่าโมเดลนั้นเป็น NPC คนหรือไม่
+local function isHumanNPC(model)
+    if not model:IsA("Model") then return false end
     
-    task.wait(0.15) -- รอให้ Part ภายในยานพาหนะสร้างครบถ้วน
+    -- ถ้ามี Head และ HumanoidRootPart/Torso ชัดเจนแบบโครงสร้างคน ให้ถือว่าเป็น NPC คน
+    local hasHead = model:FindFirstChild("Head")
+    local hasBody = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Torso") or model:FindFirstChild("UpperTorso")
+    
+    -- หากชื่อโมเดลไม่มีคำว่า Vehicle/Jeep/Tank/Plane แต่มีชิ้นส่วนร่างกายครบ = NPC คน
+    if hasHead and hasBody then
+        return true
+    end
+    
+    return false
+end
 
-    -- วนลูปขยายทุกชิ้นส่วนที่เป็น Part ในยานพาหนะโดยตรง
+local function expandVehicleOnly(model)
+    if not model:IsA("Model") then return end
+    task.wait(0.15)
+
+    -- ข้ามการขยาย Hitbox ถ้าเป็น NPC คน
+    if isHumanNPC(model) then return end
+
+    -- ขยายเฉพาะชิ้นส่วนยานพาหนะ
     for _, part in ipairs(model:GetDescendants()) do
         if part:IsA("BasePart") and not part:GetAttribute("Expanded") then
             part:SetAttribute("Expanded", true)
             
-            -- ขยายขนาดของ Part เดิม
             part.Size = part.Size * SCALE_FACTOR
             part.Transparency = HITBOX_TRANSPARENCY
             part.BrickColor = BrickColor.new("Bright blue")
             part.Material = Enum.Material.Neon
             part.CanCollide = false
-            part.CanQuery = true -- อนุญาตให้ Raycast ของปืนตรวจจับเพื่อคำนวณ Damage
+            part.CanQuery = true
 
-            -- หากมี Mesh ข้างใน ให้ขยาย Mesh ตามด้วย
             local mesh = part:FindFirstChildOfClass("SpecialMesh")
             if mesh then
                 mesh.Scale = mesh.Scale * SCALE_FACTOR
@@ -33,17 +48,13 @@ local function expandVehicleParts(model)
 end
 
 if enemiesFolder then
-    print("Damage-Registering Vehicle Hitbox Loaded!")
+    print("Vehicle-Only Hitbox Loaded!")
 
-    -- 1. สแกนยานพาหนะที่มีอยู่ตอนนี้
-    for _, vehicle in ipairs(enemiesFolder:GetChildren()) do
-        expandVehicleParts(vehicle)
+    for _, child in ipairs(enemiesFolder:GetChildren()) do
+        expandVehicleOnly(child)
     end
 
-    -- 2. ดักจับเมื่อมียานพาหนะเกิดใหม่ใน Enemies
-    enemiesFolder.ChildAdded:Connect(function(newVehicle)
-        expandVehicleParts(newVehicle)
+    enemiesFolder.ChildAdded:Connect(function(newChild)
+        expandVehicleOnly(newChild)
     end)
-else
-    warn("ไม่พบโฟลเดอร์ 'Enemies' ใน Workspace")
 end
