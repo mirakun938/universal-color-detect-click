@@ -2,95 +2,124 @@ local Workspace = game:GetService("Workspace")
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
 
+local LocalPlayer = Players.LocalPlayer
 local buildingsFolder = Workspace:WaitForChild("buildings", 10)
 
--- การตั้งค่า Highlight
-local FILL_COLOR = Color3.fromRGB(255, 170, 0)   -- สีภายใน (สีส้มทอง)
-local OUTLINE_COLOR = Color3.fromRGB(255, 255, 255) -- สีเส้นขอบ (สีขาว)
-local FILL_TRANSPARENCY = 0.5                     -- ความโปร่งใสข้างใน (0 = ทึบ, 1 = ล่องหน)
-local OUTLINE_TRANSPARENCY = 0                   -- ความโปร่งใสเส้นขอบ
+local SEARCH_RADIUS = 150 -- ระยะค้นหาสิ่งก่อสร้างรอบตัวผู้เล่น (สตัด/Studs)
 
-local isEspEnabled = true
-
--- ฟังก์ชันใส่ Highlight ให้สิ่งก่อสร้าง
-local function applyBuildingESP(model)
-    if not model:IsA("Model") and not model:IsA("Folder") then return end
+-- ฟังก์ชันค้นหาสิ่งก่อสร้างที่อยู่ใกล้ผู้เล่นที่สุด
+local function getClosestBuilding()
+    local character = LocalPlayer.Character
+    if not character or not character:FindFirstChild("HumanoidRootPart") then return nil end
     
-    -- สร้าง หรือ ดึง Highlight เดิมที่มีอยู่แล้ว
-    local highlight = model:FindFirstChild("BuildingESP")
+    local playerPos = character.HumanoidRootPart.Position
+    local closestBuilding = nil
+    local shortestDistance = SEARCH_RADIUS
+
+    if buildingsFolder then
+        for _, building in ipairs(buildingsFolder:GetChildren()) do
+            -- คำนวณหาตำแหน่งศูนย์กลางของสิ่งก่อสร้าง
+            local primaryPart = building:IsA("Model") and (building.PrimaryPart or building:FindFirstChildOfClass("BasePart")) or building:FindFirstChildOfClass("BasePart")
+            
+            if primaryPart then
+                local distance = (primaryPart.Position - playerPos).Magnitude
+                if distance < shortestDistance then
+                    shortestDistance = distance
+                    closestBuilding = building
+                end
+            end
+        end
+    end
+    
+    return closestBuilding, shortestDistance
+end
+
+-- ฟังก์ชันยืนยันและปักหมุด ESP ใส่สิ่งก่อสร้าง
+local function markBuilding(building)
+    if not building then return end
+
+    -- 1. เพิ่ม Highlight เรืองแสงทะลุกำแพง
+    local highlight = building:FindFirstChild("MarkedBuildingESP")
     if not highlight then
         highlight = Instance.new("Highlight")
-        highlight.Name = "BuildingESP"
-        highlight.Adornee = model
-        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop -- มองเห็นทะลุกำแพง
-        highlight.Parent = model
+        highlight.Name = "MarkedBuildingESP"
+        highlight.Adornee = building
+        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        highlight.FillColor = Color3.fromRGB(0, 255, 127)   -- สีเขียวสว่าง (แสดงว่ายืนยันแล้ว)
+        highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+        highlight.FillTransparency = 0.4
+        highlight.OutlineTransparency = 0
+        highlight.Parent = building
     end
 
-    -- อัปเดตสีและความโปร่งใสตามสถานะการเปิด/ปิด
-    highlight.FillColor = FILL_COLOR
-    highlight.OutlineColor = OUTLINE_COLOR
-    highlight.FillTransparency = isEspEnabled and FILL_TRANSPARENCY or 1
-    highlight.OutlineTransparency = isEspEnabled and OUTLINE_TRANSPARENCY or 1
-    highlight.Enabled = isEspEnabled
-end
+    -- 2. สร้างป้ายชื่อ (BillboardGui) ปักหมุดบอกตำแหน่ง
+    local targetPart = building:IsA("Model") and (building.PrimaryPart or building:FindFirstChildOfClass("BasePart")) or building
+    if targetPart and not targetPart:FindFirstChild("BuildingLabel") then
+        local billboard = Instance.new("BillboardGui")
+        local textLabel = Instance.new("TextLabel")
 
--- สแกนสิ่งก่อสร้างทั้งหมดในโฟลเดอร์ buildings
-local function refreshAllBuildings()
-    if not buildingsFolder then return end
-    
-    for _, child in ipairs(buildingsFolder:GetChildren()) do
-        applyBuildingESP(child)
+        billboard.Name = "BuildingLabel"
+        billboard.Adornee = targetPart
+        billboard.Size = UDim2.new(0, 150, 0, 40)
+        billboard.StudsOffset = Vector3.new(0, 8, 0) -- ยกป้ายชื่อขึ้นสูงเหนือสิ่งก่อสร้าง
+        billboard.AlwaysOnTop = true
+        billboard.Parent = targetPart
+
+        textLabel.Parent = billboard
+        textLabel.Size = UDim2.new(1, 0, 1, 0)
+        textLabel.BackgroundTransparency = 1
+        textLabel.Text = "🏠 " .. building.Name
+        textLabel.TextColor3 = Color3.fromRGB(255, 255, 0) -- ตัวหนังสือสีเหลือง
+        textLabel.TextStrokeTransparency = 0
+        textLabel.Font = Enum.Font.SourceSansBold
+        textLabel.TextSize = 18
     end
 end
 
--- ==================== ระบบ UI Toggle ====================
+-- ==================== UI กดเพื่อยืนยันตำแหน่ง ====================
 local ScreenGui = Instance.new("ScreenGui")
-local ToggleButton = Instance.new("TextButton")
+local MarkButton = Instance.new("TextButton")
 local UICorner = Instance.new("UICorner")
 
-ScreenGui.Name = "BuildingEspGui"
+ScreenGui.Name = "MarkBuildingGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or Players.LocalPlayer:WaitForChild("PlayerGui")
 
-ToggleButton.Name = "BuildingEspButton"
-ToggleButton.Parent = ScreenGui
-ToggleButton.BackgroundColor3 = Color3.fromRGB(255, 140, 0) -- สีส้ม (ON)
-ToggleButton.Position = UDim2.new(0.02, 0, 0.48, 0)
-ToggleButton.Size = UDim2.new(0, 140, 0, 45)
-ToggleButton.Font = Enum.Font.SourceSansBold
-ToggleButton.Text = "House ESP: ON"
-ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-ToggleButton.TextSize = 16.00
-ToggleButton.Active = true
-ToggleButton.Draggable = true -- ลากปุ่มเคลื่อนย้ายได้บนมือถือ
+MarkButton.Name = "MarkButton"
+MarkButton.Parent = ScreenGui
+MarkButton.BackgroundColor3 = Color3.fromRGB(0, 120, 215) -- สีฟ้า
+MarkButton.Position = UDim2.new(0.02, 0, 0.48, 0)
+MarkButton.Size = UDim2.new(0, 160, 0, 45)
+MarkButton.Font = Enum.Font.SourceSansBold
+MarkButton.Text = "📌 Mark Building"
+MarkButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+MarkButton.TextSize = 16.00
+MarkButton.Active = true
+MarkButton.Draggable = true -- ลากปุ่มเคลื่อนย้ายบนหน้าจอมือถือได้
 
 UICorner.CornerRadius = UDim.new(0, 8)
-UICorner.Parent = ToggleButton
+UICorner.Parent = MarkButton
 
--- ระบบคลิกเปิด-ปิด UI
-ToggleButton.MouseButton1Click:Connect(function()
-    isEspEnabled = not isEspEnabled
+-- เมื่อกดปุ่ม ยืนยันสิ่งก่อสร้างที่อยู่ใกล้เรา
+MarkButton.MouseButton1Click:Connect(function()
+    local closestBuilding, dist = getClosestBuilding()
     
-    if isEspEnabled then
-        ToggleButton.Text = "House ESP: ON"
-        ToggleButton.BackgroundColor3 = Color3.fromRGB(255, 140, 0)
+    if closestBuilding then
+        markBuilding(closestBuilding)
+        
+        -- เอฟเฟกต์ปุ่มแจ้งเตือนเมื่อกดสำเร็จ
+        MarkButton.Text = "✓ Marked!"
+        MarkButton.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+        task.wait(1)
+        MarkButton.Text = "📌 Mark Building"
+        MarkButton.BackgroundColor3 = Color3.fromRGB(0, 120, 215)
     else
-        ToggleButton.Text = "House ESP: OFF"
-        ToggleButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+        MarkButton.Text = "❌ No Building Near"
+        MarkButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+        task.wait(1)
+        MarkButton.Text = "📌 Mark Building"
+        MarkButton.BackgroundColor3 = Color3.fromRGB(0, 120, 215)
     end
-    
-    refreshAllBuildings()
 end)
 
-if buildingsFolder then
-    print("Building ESP Loaded Successfully!")
-    refreshAllBuildings()
-
-    -- ดักจับเมื่อมีสิ่งก่อสร้างใหม่เกิดเข้ามาในโฟลเดอร์
-    buildingsFolder.ChildAdded:Connect(function(newBuilding)
-        task.wait(0.2)
-        applyBuildingESP(newBuilding)
-    end)
-else
-    warn("ไม่พบโฟลเดอร์ 'buildings' ใน Workspace")
-end
+print("Building Position Marker Loaded!")
