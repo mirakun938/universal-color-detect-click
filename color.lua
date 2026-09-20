@@ -1,117 +1,96 @@
 local Workspace = game:GetService("Workspace")
 local CoreGui = game:GetService("CoreGui")
-local enemiesFolder = Workspace:WaitForChild("Enemies", 10)
+local Players = game:GetService("Players")
 
-local SCALE_FACTOR = Vector3.new(3, 3, 3) 
-local HITBOX_TRANSPARENCY = 0.5
-local isScriptEnabled = true -- สถานะ เปิด/ปิด
+local buildingsFolder = Workspace:WaitForChild("buildings", 10)
 
--- รายชื่อชิ้นส่วนร่างกายของมนุษย์ (กรองคนขับออก)
-local HUMAN_PARTS = {
-    ["head"] = true, ["torso"] = true, ["humanoidrootpart"] = true,
-    ["left arm"] = true, ["right arm"] = true, ["left leg"] = true, ["right leg"] = true,
-    ["upperleg"] = true, ["lowerleg"] = true, ["foot"] = true,
-    ["upperarm"] = true, ["lowerarm"] = true, ["hand"] = true,
-    ["uppertorso"] = true, ["lowertorso"] = true
-}
+-- การตั้งค่า Highlight
+local FILL_COLOR = Color3.fromRGB(255, 170, 0)   -- สีภายใน (สีส้มทอง)
+local OUTLINE_COLOR = Color3.fromRGB(255, 255, 255) -- สีเส้นขอบ (สีขาว)
+local FILL_TRANSPARENCY = 0.5                     -- ความโปร่งใสข้างใน (0 = ทึบ, 1 = ล่องหน)
+local OUTLINE_TRANSPARENCY = 0                   -- ความโปร่งใสเส้นขอบ
 
--- ฟังก์ชันขยาย/คืนค่า Part
-local function updatePartHitbox(part, enable)
-    if not part:IsA("BasePart") then return end
-    local partName = string.lower(part.Name)
+local isEspEnabled = true
+
+-- ฟังก์ชันใส่ Highlight ให้สิ่งก่อสร้าง
+local function applyBuildingESP(model)
+    if not model:IsA("Model") and not model:IsA("Folder") then return end
     
-    local isHumanPart = HUMAN_PARTS[partName] or false
-    local isInsideCharacter = part:FindFirstAncestorOfClass("Accessory") or part.Parent:FindFirstChildOfClass("Humanoid")
+    -- สร้าง หรือ ดึง Highlight เดิมที่มีอยู่แล้ว
+    local highlight = model:FindFirstChild("BuildingESP")
+    if not highlight then
+        highlight = Instance.new("Highlight")
+        highlight.Name = "BuildingESP"
+        highlight.Adornee = model
+        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop -- มองเห็นทะลุกำแพง
+        highlight.Parent = model
+    end
+
+    -- อัปเดตสีและความโปร่งใสตามสถานะการเปิด/ปิด
+    highlight.FillColor = FILL_COLOR
+    highlight.OutlineColor = OUTLINE_COLOR
+    highlight.FillTransparency = isEspEnabled and FILL_TRANSPARENCY or 1
+    highlight.OutlineTransparency = isEspEnabled and OUTLINE_TRANSPARENCY or 1
+    highlight.Enabled = isEspEnabled
+end
+
+-- สแกนสิ่งก่อสร้างทั้งหมดในโฟลเดอร์ buildings
+local function refreshAllBuildings()
+    if not buildingsFolder then return end
     
-    if not isHumanPart and not isInsideCharacter then
-        if enable then
-            if not part:GetAttribute("OriginalSize") then
-                part:SetAttribute("OriginalSize", part.Size)
-                part:SetAttribute("OriginalTrans", part.Transparency)
-                part:SetAttribute("OriginalColor", part.BrickColor)
-                part:SetAttribute("OriginalMat", part.Material)
-            end
-            
-            part.Size = part:GetAttribute("OriginalSize") * SCALE_FACTOR
-            part.Transparency = HITBOX_TRANSPARENCY
-            part.BrickColor = BrickColor.new("Bright blue")
-            part.Material = Enum.Material.Neon
-            part.CanCollide = false
-            part.CanQuery = true
-        else
-            -- คืนค่าเดิมเมื่อปิดสวิตช์
-            if part:GetAttribute("OriginalSize") then
-                part.Size = part:GetAttribute("OriginalSize")
-                part.Transparency = part:GetAttribute("OriginalTrans")
-                part.BrickColor = part:GetAttribute("OriginalColor")
-                part.Material = part:GetAttribute("OriginalMat")
-            end
-        end
+    for _, child in ipairs(buildingsFolder:GetChildren()) do
+        applyBuildingESP(child)
     end
 end
 
--- ฟังก์ชันสแกนยานพาหนะทั้งหมด
-local function refreshAllVehicles()
-    if not enemiesFolder then return end
-    for _, model in ipairs(enemiesFolder:GetChildren()) do
-        if model:IsA("Model") then
-            for _, part in ipairs(model:GetDescendants()) do
-                updatePartHitbox(part, isScriptEnabled)
-            end
-        end
-    end
-end
-
--- สร้าง UI สวิตช์ Toggle
+-- ==================== ระบบ UI Toggle ====================
 local ScreenGui = Instance.new("ScreenGui")
 local ToggleButton = Instance.new("TextButton")
 local UICorner = Instance.new("UICorner")
 
--- ป้องกัน UI หายเมื่อตัวละครตาย
-ScreenGui.Name = "VehicleHitboxGui"
+ScreenGui.Name = "BuildingEspGui"
 ScreenGui.ResetOnSpawn = false
-ScreenGui.Parent = (gethui and gethui()) or CoreGui or game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+ScreenGui.Parent = (gethui and gethui()) or CoreGui or Players.LocalPlayer:WaitForChild("PlayerGui")
 
-ToggleButton.Name = "ToggleButton"
+ToggleButton.Name = "BuildingEspButton"
 ToggleButton.Parent = ScreenGui
-ToggleButton.BackgroundColor3 = Color3.fromRGB(0, 170, 127) -- สีเขียว (ON)
-ToggleButton.Position = UDim2.new(0.02, 0, 0.4, 0)
+ToggleButton.BackgroundColor3 = Color3.fromRGB(255, 140, 0) -- สีส้ม (ON)
+ToggleButton.Position = UDim2.new(0.02, 0, 0.48, 0)
 ToggleButton.Size = UDim2.new(0, 140, 0, 45)
 ToggleButton.Font = Enum.Font.SourceSansBold
-ToggleButton.Text = "Vehicle Hitbox: ON"
+ToggleButton.Text = "House ESP: ON"
 ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 ToggleButton.TextSize = 16.00
 ToggleButton.Active = true
-ToggleButton.Draggable = true -- สามารถลากปุ่มย้ายตำแหน่งบนหน้าจอได้
+ToggleButton.Draggable = true -- ลากปุ่มเคลื่อนย้ายได้บนมือถือ
 
 UICorner.CornerRadius = UDim.new(0, 8)
 UICorner.Parent = ToggleButton
 
--- ระบบคลิกเปิด-ปิด
+-- ระบบคลิกเปิด-ปิด UI
 ToggleButton.MouseButton1Click:Connect(function()
-    isScriptEnabled = not isScriptEnabled
+    isEspEnabled = not isEspEnabled
     
-    if isScriptEnabled then
-        ToggleButton.Text = "Vehicle Hitbox: ON"
-        ToggleButton.BackgroundColor3 = Color3.fromRGB(0, 170, 127) -- สีเขียว
+    if isEspEnabled then
+        ToggleButton.Text = "House ESP: ON"
+        ToggleButton.BackgroundColor3 = Color3.fromRGB(255, 140, 0)
     else
-        ToggleButton.Text = "Vehicle Hitbox: OFF"
-        ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50) -- สีแดง
+        ToggleButton.Text = "House ESP: OFF"
+        ToggleButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
     end
     
-    refreshAllVehicles()
+    refreshAllBuildings()
 end)
 
--- ดักจับเมื่อมียานพาหนะเกิดใหม่
-if enemiesFolder then
-    enemiesFolder.ChildAdded:Connect(function(newChild)
-        task.wait(0.2)
-        if newChild:IsA("Model") then
-            for _, part in ipairs(newChild:GetDescendants()) do
-                updatePartHitbox(part, isScriptEnabled)
-            end
-        end
-    end)
-end
+if buildingsFolder then
+    print("Building ESP Loaded Successfully!")
+    refreshAllBuildings()
 
-print("Vehicle Hitbox UI Loaded Successfully!")
+    -- ดักจับเมื่อมีสิ่งก่อสร้างใหม่เกิดเข้ามาในโฟลเดอร์
+    buildingsFolder.ChildAdded:Connect(function(newBuilding)
+        task.wait(0.2)
+        applyBuildingESP(newBuilding)
+    end)
+else
+    warn("ไม่พบโฟลเดอร์ 'buildings' ใน Workspace")
+end
