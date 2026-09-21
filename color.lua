@@ -1,75 +1,52 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
--- ล็อคค่า UI กระสุนบนหน้าจอไม่ให้ตัวเลขลดลง
-local function patchMinigunGUI()
-    local char = LocalPlayer.Character
-    if not char then return end
+-- ดึง Remote Upgrade จากตำแหน่งจริงใน ReplicatedStorage
+local upgradeRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Gui"):WaitForChild("Upgrade")
+
+local function autoRefillMinigun()
+    print("กำลังทำ Auto Refill กระสุน Minigun...")
     
-    local tool = char:FindFirstChild("Borrowed Technology") or char:FindFirstChildOfClass("Tool")
-    if tool and (tool.Name == "Borrowed Technology" or string.find(string.lower(tool.Name), "borrowed")) then
-        
-        -- ปรับแต่ง LocalScript ของปืนเพื่อล็อคตัวเลขกระสุน
-        local gunServer = tool:FindFirstChild("GunServer")
-        if gunServer then
-            local ammoModule = tool:FindFirstChild("MinigunState") or gunServer:FindFirstChild("GetServerAmmo")
-            
-            -- ปรับ Value หรือ Attributes ทุกตัวในปืน
-            for _, v in ipairs(tool:GetDescendants()) do
-                if v:IsA("IntValue") or v:IsA("NumberValue") then
-                    v.Value = 300
-                end
-            end
-        end
-    end
+    -- 1. สั่งลดระดับ (Downgrade) เพื่อเอาพอยต์คืน (Argument 4 = false)
+    pcall(function()
+        upgradeRemote:FireServer("Borrowed Technology", "MaxAmmo", "Primary", false)
+    end)
+    
+    task.wait(0.05) -- หน่วงเวลาเล็กน้อยเพื่อให้ Server รับคำสั่งแรกทัน
+    
+    -- 2. สั่งอัปเกรดกลับ (Upgrade) เพื่อสั่งให้ Refill กระสุนทำงาน (Argument 4 = true)
+    pcall(function()
+        upgradeRemote:FireServer("Borrowed Technology", "MaxAmmo", "Primary", true)
+    end)
 end
 
--- ระบบ Hooking ป้องกันไม่ให้ Client ส่ง Remote หักกระสุนไปที่ Server
-local gmt = getrawmetatable(game)
-local oldNamecall = gmt.__namecall
-setreadonly(gmt, false)
+-- ==================== ปุ่มกด GUI หน้าจอ ====================
+local CoreGui = game:GetService("CoreGui")
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "MinigunRefillGui"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
-gmt.__namecall = newcclosure(function(self, ...)
-    local method = getnamecallmethod()
-    local args = {...}
+local RefillBtn = Instance.new("TextButton")
+RefillBtn.Name = "RefillButton"
+RefillBtn.Parent = ScreenGui
+RefillBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
+RefillBtn.Position = UDim2.new(0.02, 0, 0.45, 0)
+RefillBtn.Size = UDim2.new(0, 140, 0, 45)
+RefillBtn.Font = Enum.Font.SourceSansBold
+RefillBtn.Text = "AUTO REFILL (0 Points)"
+RefillBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+RefillBtn.TextSize = 15
+RefillBtn.Active = true
+RefillBtn.Draggable = true
 
-    -- ตรวจจับ RemoteEvent การยิงของปืน Minigun (WeaponFired / RegisterBullet)
-    if (method == "FireServer" or method == "InvokeServer") and self then
-        if self.Name == "WeaponFired" or self.Name == "RegisterBullet" then
-            local char = LocalPlayer.Character
-            if char then
-                local tool = char:FindFirstChildOfClass("Tool")
-                if tool and (tool.Name == "Borrowed Technology" or string.find(string.lower(tool.Name), "borrowed")) then
-                    -- ปรับแต่ง Arguments ไม่ให้ Server หักกระสุน หรือเรียกใช้งานเฉพาะนัดแรก
-                    -- (หรือปล่อยผ่านโดยไม่ส่งข้อมูลความเสียหายกระสุนลด)
-                end
-            end
-        end
-    end
+local BtnCorner = Instance.new("UICorner")
+BtnCorner.CornerRadius = UDim.new(0, 8)
+BtnCorner.Parent = RefillBtn
 
-    return oldNamecall(self, ...)
+RefillBtn.MouseButton1Click:Connect(function()
+    autoRefillMinigun()
 end)
 
-setreadonly(gmt, true)
-
--- Loop ล็อคตัวเลขกระสุน Minigun ไว้ที่ 300 / ค่าสูงสุดตลอดเวลา
-task.spawn(function()
-    while task.wait(0.01) do
-        local char = LocalPlayer.Character
-        if char then
-            local tool = char:FindFirstChild("Borrowed Technology")
-            if tool then
-                -- ค้นหาและคืนค่ากระสุนกลับเป็นเต็มทันที
-                for _, child in ipairs(tool:GetDescendants()) do
-                    if child:IsA("IntValue") or child:IsA("NumberValue") then
-                        if child.Name == "Ammo" or child.Name == "Bullets" or child.Name == "Clip" then
-                            child.Value = 300
-                        end
-                    end
-                end
-            end
-        end
-    end
-end)
-
-print("Minigun Bypass & Infinite Ammo Hook Loaded!")
+print("Minigun Upgrade-Refill Loaded Successfully!")
