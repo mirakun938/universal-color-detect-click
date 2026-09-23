@@ -6,14 +6,17 @@ local enemiesFolder = Workspace:WaitForChild("Enemies", 10)
 
 -- ==================== ตั้งค่า (CONFIG) ====================
 local SCALE_FACTOR = Vector3.new(3, 3, 3)        -- ขนาดขยายยานพาหนะทั่วไป
-local PROJECTILE_SIZE = Vector3.new(12, 12, 12)  -- ขนาดขยายจรวด / ลูกปืนใหญ่
-local HITBOX_TRANSPARENCY = 0.5
+local PROJECTILE_SIZE = Vector3.new(15, 15, 15)  -- ขนาดขยายจรวด / ลูกปืนใหญ่ (ปรับใหญ่ขึ้นเพื่อความชัดเจน)
+local HITBOX_TRANSPARENCY = 0.4                  -- ปรับให้ทึบขึ้นเล็กน้อยเพื่อสังเกตง่าย
 local isScriptEnabled = true
 
--- รายชื่อจรวด/ลูกปืนใหญ่ศัตรูที่อยู่ใน Enemies
-local PROJECTILE_NAMES = {
-    ["enemyreturnrocket"] = true,
-    ["reflectcannonball"] = true
+-- คีย์เวิร์ดสำหรับตรวจจับจรวดและลูกปืนใหญ่ (ค้นหาแบบยืดหยุ่น)
+local PROJECTILE_KEYWORDS = {
+    "enemyreturnrocket",
+    "reflectcannonball",
+    "returnrocket",
+    "cannonball",
+    "rocket"
 }
 
 -- รายชื่อชิ้นส่วนร่างกายของมนุษย์ (กรองคนขับออก)
@@ -25,19 +28,31 @@ local HUMAN_PARTS = {
     ["uppertorso"] = true, ["lowertorso"] = true
 }
 
--- ฟังก์ชันสำหรับปรับเปลี่ยนขนาดและคุณสมบัติ Hitbox
-local function updatePartHitbox(part, enable)
-    if not part:IsA("BasePart") then return end
-    local partName = string.lower(part.Name)
+-- ฟังก์ชันเช็คว่าวัตถุมีชื่อตรงกับคีย์เวิร์ดกระสุน/จรวดหรือไม่
+local function isProjectileObject(instance)
+    if not instance then return false end
+    local nameLower = string.lower(instance.Name)
     
-    local isProjectile = PROJECTILE_NAMES[partName] or false
+    for _, keyword in ipairs(PROJECTILE_KEYWORDS) do
+        if string.find(nameLower, keyword) then
+            return true
+        end
+    end
+    return false
+end
+
+-- ฟังก์ชันปรับแต่ง Part
+local function applyHitboxToPart(part, isProjectile, enable)
+    if not part:IsA("BasePart") then return end
+    
+    local partName = string.lower(part.Name)
     local isHumanPart = HUMAN_PARTS[partName] or false
     local isInsideCharacter = part:FindFirstAncestorOfClass("Accessory") or (part.Parent and part.Parent:FindFirstChildOfClass("Humanoid"))
     
-    -- ทำงานเฉพาะกระสุน/จรวด หรือ Part ยานพาหนะที่ไม่ใช่ตัวละคร
+    -- ถ้าเป็นกระสุน/จรวด ให้ขยายทันที (ไม่สนว่าเป็น Part ตัวละครหรือไม่)
+    -- ถ้าเป็นยานพาหนะ ต้องไม่ใช่ Part ร่างกายคน
     if isProjectile or (not isHumanPart and not isInsideCharacter) then
         if enable then
-            -- สำรองค่าดั้งเดิมไว้
             if not part:GetAttribute("OriginalSize") then
                 part:SetAttribute("OriginalSize", part.Size)
                 part:SetAttribute("OriginalTrans", part.Transparency)
@@ -46,20 +61,19 @@ local function updatePartHitbox(part, enable)
                 part:SetAttribute("OriginalCanCollide", part.CanCollide)
             end
             
-            -- ปรับขนาดตามประเภท
             if isProjectile then
                 part.Size = PROJECTILE_SIZE
+                part.BrickColor = BrickColor.new("Bright red") -- เปลี่ยนจรวดเป็นสีแดงสดสังเกตง่าย
             else
                 part.Size = part:GetAttribute("OriginalSize") * SCALE_FACTOR
+                part.BrickColor = BrickColor.new("Bright blue")
             end
             
             part.Transparency = HITBOX_TRANSPARENCY
-            part.BrickColor = BrickColor.new("Bright blue")
             part.Material = Enum.Material.Neon
             part.CanCollide = false
             part.CanQuery = true
         else
-            -- คืนค่าเดิมเมื่อปิด
             if part:GetAttribute("OriginalSize") then
                 part.Size = part:GetAttribute("OriginalSize")
                 part.Transparency = part:GetAttribute("OriginalTrans")
@@ -71,11 +85,35 @@ local function updatePartHitbox(part, enable)
     end
 end
 
--- สแกนและอัปเดตวัตถุทั้งหมดในโฟลเดอร์ Enemies
-local function refreshEnemiesFolder()
-    if not enemiesFolder then return end
-    for _, item in ipairs(enemiesFolder:GetDescendants()) do
-        updatePartHitbox(item, isScriptEnabled)
+-- ฟังก์ชันประมวลผลวัตถุ (รองรับทั้ง Part และ Model)
+local function processObject(instance, enable)
+    if not instance then return end
+    
+    local isProj = isProjectileObject(instance) or isProjectileObject(instance.Parent)
+    
+    if instance:IsA("BasePart") then
+        applyHitboxToPart(instance, isProj, enable)
+    elseif instance:IsA("Model") or instance:IsA("Folder") then
+        for _, child in ipairs(instance:GetDescendants()) do
+            if child:IsA("BasePart") then
+                applyHitboxToPart(child, isProj or isProjectileObject(child), enable)
+            end
+        end
+    end
+end
+
+-- สแกนวัตถุทั้งหมดใน Enemies และ Workspace
+local function refreshAll()
+    if enemiesFolder then
+        for _, child in ipairs(enemiesFolder:GetChildren()) do
+            processObject(child, isScriptEnabled)
+        end
+    end
+    
+    for _, child in ipairs(Workspace:GetChildren()) do
+        if isProjectileObject(child) then
+            processObject(child, isScriptEnabled)
+        end
     end
 end
 
@@ -114,19 +152,33 @@ ToggleButton.MouseButton1Click:Connect(function()
         ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
     end
     
-    refreshEnemiesFolder()
+    refreshAll()
 end)
 
--- ==================== Event Listener ====================
--- ดักจับทุกสิ่งที่เสกเข้ามาใน Enemies (ทั้งยานพาหนะและจรวด)
+-- ==================== Event Listeners ====================
+-- ดักจับใน Enemies Folder
 if enemiesFolder then
-    enemiesFolder.DescendantAdded:Connect(function(newItem)
-        task.wait(0.05)
-        updatePartHitbox(newItem, isScriptEnabled)
+    enemiesFolder.ChildAdded:Connect(function(newChild)
+        task.wait(0.1)
+        processObject(newChild, isScriptEnabled)
+    end)
+    enemiesFolder.DescendantAdded:Connect(function(newDescendant)
+        task.wait(0.1)
+        if newDescendant:IsA("BasePart") then
+            processObject(newDescendant, isScriptEnabled)
+        end
     end)
 end
 
--- เริ่มสแกนครั้งแรก
-refreshEnemiesFolder()
+-- ดักจับกรณีเสกตรงลงใน Workspace
+Workspace.ChildAdded:Connect(function(newChild)
+    if isProjectileObject(newChild) then
+        task.wait(0.1)
+        processObject(newChild, isScriptEnabled)
+    end
+end)
 
-print("Enemies Folder Hitbox Handler Loaded!")
+-- สแกนทำงานครั้งแรก
+refreshAll()
+
+print("Enhanced Projectile & Vehicle Hitbox Loaded!")
