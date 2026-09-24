@@ -4,40 +4,32 @@ local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 
--- 1. ค้นหา RemoteEvent deliveryfinserv ที่เห็นใน Dex
-local function getDeliveryRemote()
-    return ReplicatedStorage:FindFirstChild("deliveryfinserv", true) 
-        or Workspace:FindFirstChild("deliveryfinserv", true)
-end
+-- ฟังก์ชันค้นหาจุดส่งใน Workspace.locations
+local function getTargetLocation()
+    local locationsFolder = Workspace:FindFirstChild("locations")
+    if not locationsFolder then return nil end
 
--- 2. อ่านชื่อเป้าหมายสถานที่ส่งจาก UI
-local function getTargetLocationName()
+    -- อ่านชื่อจาก UI ถ้ามี
+    local targetName = nil
     local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    if not playerGui then return nil end
-    
-    for _, gui in ipairs(playerGui:GetChildren()) do
-        if gui:IsA("ScreenGui") and gui.Enabled then
-            for _, desc in ipairs(gui:GetDescendants()) do
-                if desc:IsA("TextLabel") and desc.Visible and desc.Text ~= "" then
-                    local txt = desc.Text
-                    -- ถ้ามีข้อความบอกสถานที่
-                    if string.find(string.lower(txt), "go to") or string.find(string.lower(txt), "deliver") then
-                        local clean = string.gsub(txt, "[Gg][Oo] [Tt][Oo] ", "")
-                        clean = string.gsub(clean, "[Dd][Ee][Ll][Ii][Vv][Ee][Rr] [Tt][Oo] ", "")
-                        return clean
+    if playerGui then
+        for _, gui in ipairs(playerGui:GetChildren()) do
+            if gui:IsA("ScreenGui") and gui.Enabled then
+                for _, desc in ipairs(gui:GetDescendants()) do
+                    if desc:IsA("TextLabel") and desc.Visible and desc.Text ~= "" then
+                        local txt = desc.Text
+                        if string.find(string.lower(txt), "go to") or string.find(string.lower(txt), "deliver") then
+                            targetName = string.gsub(txt, "[Gg][Oo] [Tt][Oo] ", "")
+                            targetName = string.gsub(targetName, "[Dd][Ee][Ll][Ii][Vv][Ee][Rr] [Tt][Oo] ", "")
+                            break
+                        end
                     end
                 end
             end
         end
     end
-    return nil
-end
 
--- 3. ค้นหา Object ตำแหน่งจริงใน Workspace.locations
-local function getTargetObject(targetName)
-    local locationsFolder = Workspace:FindFirstChild("locations")
-    if not locationsFolder then return nil end
-
+    -- แมตช์ชื่อสถานที่กับ Object ใน locations
     if targetName then
         local cleanTarget = string.lower(targetName)
         for _, child in ipairs(locationsFolder:GetChildren()) do
@@ -46,69 +38,80 @@ local function getTargetObject(targetName)
             end
         end
     end
-    -- ถ้าหาจากชื่อบน UI ไม่เจอ ให้ดึงสถานที่อันแรกในโฟลเดอร์ locations มาใช้สำรอง
+
+    -- ถ้าหาชื่อไม่เจอ คืนค่าสถานที่แรกในโฟลเดอร์มาใช้
     return locationsFolder:GetChildren()[1]
 end
 
--- ฟังก์ชันหลักเมื่อกดปุ่ม
-local function executeDelivery()
-    local targetName = getTargetLocationName()
-    local targetObj = getTargetObject(targetName)
-    local remote = getDeliveryRemote()
-
-    -- [วิธีที่ 1] ยิง Remote deliveryfinserv เพื่อจบงานทันที
-    if remote then
-        if targetObj then
-            remote:FireServer(targetObj.Name)
-            remote:FireServer(targetObj)
-        else
-            remote:FireServer()
+-- ฟังก์ชันส่งงานแบบ Force Touch + Fire Remote
+local function forceCompleteDelivery()
+    local char = LocalPlayer.Character
+    if not char then return end
+    
+    local rootPart = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local seat = hum and hum.SeatPart
+    local vehicle = seat and seat:FindFirstAncestorOfClass("Model")
+    
+    local targetObj = getTargetLocation()
+    
+    if targetObj then
+        -- หา BasePart สำหรับจำลองการแตะ (Touch)
+        local targetPart = targetObj:IsA("BasePart") and targetObj or targetObj:FindFirstChildWhichIsA("BasePart", true)
+        
+        if targetPart and rootPart then
+            -- 1. วาร์ประยะประชิดไปที่จุดส่ง
+            local tpTarget = vehicle or char
+            tpTarget:PivotTo(targetPart.CFrame + Vector3.new(0, 2, 0))
+            
+            -- 2. จำลองการแตะโซนส่ง (Touch Simulation)
+            if firetouchinterest then
+                firetouchinterest(rootPart, targetPart, 0)
+                task.wait(0.1)
+                firetouchinterest(rootPart, targetPart, 1)
+                
+                if seat then
+                    firetouchinterest(seat, targetPart, 0)
+                    task.wait(0.1)
+                    firetouchinterest(seat, targetPart, 1)
+                end
+            end
+            print("จำลองการแตะจุดส่งสำเร็จ:", targetObj.Name)
         end
-        print("ส่ง Remote deliveryfinserv เรียบร้อยแล้ว!")
     end
 
-    -- [วิธีที่ 2] วาร์ปตัวละคร/รถไปแตะจุดส่งใน locations
-    if targetObj then
-        local targetCFrame
-        if targetObj:IsA("BasePart") then
-            targetCFrame = targetObj.CFrame
-        elseif targetObj:IsA("Model") then
-            targetCFrame = targetObj:GetPivot()
-        end
-
-        if targetCFrame then
-            local character = LocalPlayer.Character
-            if character then
-                local humanoid = character:FindFirstChildOfClass("Humanoid")
-                local seat = humanoid and humanoid.SeatPart
-                local vehicle = seat and seat:FindFirstAncestorOfClass("Model")
-                
-                local tpTarget = vehicle or character
-                tpTarget:PivotTo(targetCFrame + Vector3.new(0, 3, 0))
-                print("วาร์ปไปยังสถานที่:", targetObj.Name)
+    -- 3. ยิง Remote Event ยืนยันการส่งงานทั้งหมด
+    local remotes = {"deliveryfinserv", "deliveryfin", "delinterrupt"}
+    for _, remoteName in ipairs(remotes) do
+        local remote = ReplicatedStorage:FindFirstChild(remoteName, true) or Workspace:FindFirstChild(remoteName, true)
+        if remote and remote:IsA("RemoteEvent") then
+            if targetObj then
+                remote:FireServer(targetObj.Name)
+                remote:FireServer(targetObj)
             end
+            remote:FireServer()
         end
     end
 end
 
--- สร้างปุ่มใช้งานบนหน้าจอ
+-- สร้าง UI Button
 local ScreenGui = Instance.new("ScreenGui")
 local ToggleButton = Instance.new("TextButton")
 local UICorner = Instance.new("UICorner")
 
-ScreenGui.Name = "AutoDeliveryGui"
+ScreenGui.Name = "ForceDeliveryGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
-ToggleButton.Name = "DeliveryBtn"
+ToggleButton.Name = "ForceBtn"
 ToggleButton.Parent = ScreenGui
-ToggleButton.BackgroundColor3 = Color3.fromRGB(255, 120, 0)
+ToggleButton.BackgroundColor3 = Color3.fromRGB(220, 30, 60)
 ToggleButton.Position = UDim2.new(0.02, 0, 0.45, 0)
 ToggleButton.Size = UDim2.new(0, 170, 0, 50)
 ToggleButton.Font = Enum.Font.SourceSansBold
-ToggleButton.Text = "FINISH DELIVERY NOW"
+ToggleButton.Text = "FORCE FINISH (TOUCH)"
 ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-ToggleButton.TextSize = 15.00
+ToggleButton.TextSize = 14.00
 ToggleButton.Active = true
 ToggleButton.Draggable = true
 
@@ -116,7 +119,7 @@ UICorner.CornerRadius = UDim.new(0, 8)
 UICorner.Parent = ToggleButton
 
 ToggleButton.MouseButton1Click:Connect(function()
-    executeDelivery()
+    forceCompleteDelivery()
 end)
 
-print("Auto Delivery Script Ready!")
+print("Force Touch Delivery Loaded!")
