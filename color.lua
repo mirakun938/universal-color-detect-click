@@ -4,51 +4,48 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
 local autoFarmActive = false
 
--- ค่าปรับแต่งการขับขี่
-local TARGET_SPEED = 60 -- ความเร็วในการขับขี่ (ปรับเพิ่ม-ลดตามความเหมาะ)
-local RAY_CAST_DISTANCE = 25 -- ระยะตรวจจับสิ่งกีดขวางข้างหน้า (ยิ่งเยอะยิ่งเบรกไว)
+-- ฟังก์ชันจำลองการกดปุ่มคีย์บอร์ด (W, A, S, D)
+local function setPedal(key, isPressed)
+    VirtualInputManager:SendKeyEvent(isPressed, key, false, game)
+end
 
--- ฟังก์ชันดึง VehicleSeat ของรถที่เรานั่งอยู่
-local function getVehicleSeat()
+-- ฟังก์ชันหยุดรถ (ปล่อยทุกปุ่ม)
+local function stopVehicle()
+    setPedal(Enum.KeyCode.W, false)
+    setPedal(Enum.KeyCode.S, false)
+    setPedal(Enum.KeyCode.A, false)
+    setPedal(Enum.KeyCode.D, false)
+end
+
+-- ฟังก์ชันหาตำแหน่งรถ / HumanoidRootPart
+local function getVehiclePart()
     local char = LocalPlayer.Character
     if not char then return nil end
     local hum = char:FindFirstChildOfClass("Humanoid")
-    return hum and hum.SeatPart
+    if not hum or not hum.SeatPart then return nil end
+    
+    local vehicle = hum.SeatPart:FindFirstAncestorOfClass("Model")
+    return vehicle and (vehicle.PrimaryPart or vehicle:FindFirstChildWhichIsA("BasePart")) or char:FindFirstChild("HumanoidRootPart")
 end
 
--- ฟังก์ชันยิง Raycast ตรวจจับสิ่งกีดขวางข้างหน้าป้องกันรถพัง
-local function isObstacleAhead(vehiclePart)
-    local rayOrigin = vehiclePart.Position + Vector3.new(0, 1, 0)
-    local rayDirection = vehiclePart.CFrame.LookVector * RAY_CAST_DISTANCE
-    
-    local raycastParams = RaycastParams.new()
-    raycastParams.FilterType = RaycastFilterType.Exclude
-    raycastParams.FilterDescendantsInstances = {vehiclePart.Parent, LocalPlayer.Character}
-    
-    local result = Workspace:Raycast(rayOrigin, rayDirection, raycastParams)
-    return result ~= nil
-end
-
--- ฟังก์ชันขับรถไปยังจุดหมายอย่างเรียบเนียน (Autopilot Core)
+-- ฟังก์ชันขับรถด้วย Pathfinding + กดปุ่ม W A S D
 local function driveToDestination(destinationPos)
-    local seat = getVehicleSeat()
-    if not seat or not seat:IsA("VehicleSeat") then return false end
-    local vehicle = seat:FindFirstAncestorOfClass("Model")
-    local primaryPart = seat
+    local vehiclePart = getVehiclePart()
+    if not vehiclePart then return false end
 
-    -- 1. สร้างเส้นทาง Pathfinding ตาม roads/terrain
     local path = PathfindingService:CreatePath({
-        AgentRadius = 7, -- ขนาดตัวรถ
+        AgentRadius = 8,
         AgentHeight = 6,
         AgentCanJump = false,
     })
 
     local success = pcall(function()
-        path:ComputeAsync(primaryPart.Position, destinationPos)
+        path:ComputeAsync(vehiclePart.Position, destinationPos)
     end)
 
     if not success or path.Status ~= Enum.PathStatus.Success then
@@ -57,23 +54,21 @@ local function driveToDestination(destinationPos)
 
     local waypoints = path:GetWaypoints()
     local currentWaypointIndex = 1
-    local lastPos = primaryPart.Position
+    local lastPos = vehiclePart.Position
     local stuckTimer = 0
 
-    -- ลูปควบคุมการขับขี่
     while autoFarmActive and currentWaypointIndex <= #waypoints do
         RunService.Heartbeat:Wait()
-        seat = getVehicleSeat()
-        if not seat then break end
+        vehiclePart = getVehiclePart()
+        if not vehiclePart then break end
 
         local targetWaypoint = waypoints[currentWaypointIndex]
         local wayPointPos = targetWaypoint.Position
-        local currentPos = primaryPart.Position
-        
-        -- คำนวณระยะห่างระหว่างจุด Waypoint
+        local currentPos = vehiclePart.Position
+
         local distToWaypoint = (Vector3.new(currentPos.X, 0, currentPos.Z) - Vector3.new(wayPointPos.X, 0, wayPointPos.Z)).Magnitude
 
-        -- ตรวจสอบว่ารถติดหรือไม่ (Stuck Detection)
+        -- ระบบเช็คว่ารถติดหรือไม่
         if (currentPos - lastPos).Magnitude < 0.5 then
             stuckTimer = stuckTimer + 0.1
         else
@@ -81,45 +76,46 @@ local function driveToDestination(destinationPos)
         end
         lastPos = currentPos
 
-        -- ถ้ารถติดสิ่งกีดขวาง ให้ใส่เกียร์ถอยหลังแก้ตำแหน่ง (Stuck Recovery)
+        -- ถ้ารถติด ให้ถอยหลังแก้ตำแหน่ง
         if stuckTimer > 2.5 then
-            seat.ThrottleFloat = -1 -- ถอยหลัง
-            seat.SteerFloat = -1
+            stopVehicle()
+            setPedal(Enum.KeyCode.S, true) -- กด S ถอยหลัง
+            setPedal(Enum.KeyCode.A, true)
             task.wait(1.5)
-            seat.ThrottleFloat = 1 -- เดินหน้าตั้งหลักใหม่
-            seat.SteerFloat = 1
+            stopVehicle()
+            setPedal(Enum.KeyCode.W, true) -- กด W ตั้งหลัก
             task.wait(0.5)
             stuckTimer = 0
-            break -- คำนวณคำสั่งใหม่
+            break
         end
 
-        -- ระบบเบรกอัตโนมัติเมื่อเจอสิ่งกีดขวาง
-        if isObstacleAhead(primaryPart) then
-            seat.ThrottleFloat = 0.2 -- ชะลอความเร็วลง
+        -- บังคับทิศทางเลี้ยว (A / D)
+        local relativeVector = vehiclePart.CFrame:VectorToObjectSpace(wayPointPos - currentPos)
+        if relativeVector.X < -1.5 then
+            setPedal(Enum.KeyCode.A, true)
+            setPedal(Enum.KeyCode.D, false)
+        elseif relativeVector.X > 1.5 then
+            setPedal(Enum.KeyCode.D, true)
+            setPedal(Enum.KeyCode.A, false)
         else
-            seat.ThrottleFloat = 1.0 -- เหยียบคันเร่งตามปกติ
+            setPedal(Enum.KeyCode.A, false)
+            setPedal(Enum.KeyCode.D, false)
         end
 
-        -- บังคับพวงมาลัยเลี้ยวเข้าหา Waypoint
-        local relativeVector = primaryPart.CFrame:VectorToObjectSpace(wayPointPos - currentPos)
-        local angle = math.atan2(-relativeVector.X, -relativeVector.Z)
-        seat.SteerFloat = math.clamp(angle * 2, -1, 1)
+        -- เหยียบคันเร่งเดินหน้า (W)
+        setPedal(Enum.KeyCode.W, true)
 
-        -- เมื่อขับถึงโหนดนี้แล้ว ให้เปลี่ยนไปโหนดถัดไป
-        if distToWaypoint < 12 then
+        -- เมื่อถึงจุด Waypoint ถัดไป
+        if distToWaypoint < 14 then
             currentWaypointIndex = currentWaypointIndex + 1
         end
     end
 
-    -- จอดรถเมื่อถึงจุดหมาย
-    if seat then
-        seat.ThrottleFloat = 0
-        seat.SteerFloat = 0
-    end
+    stopVehicle()
     return true
 end
 
--- ฟังก์ชันค้นหาจุดส่งของ (Location)
+-- ฟังก์ชันค้นหาจุดส่ง (Location)
 local function getTargetLocation()
     local locationsFolder = Workspace:FindFirstChild("locations")
     if not locationsFolder then return nil end
@@ -155,14 +151,14 @@ local function getTargetLocation()
     return locationsFolder:GetChildren()[1]
 end
 
--- Main Autopilot Farm Loop
+-- Main Loop
 task.spawn(function()
     while true do
         task.wait(1)
         if autoFarmActive then
-            local seat = getVehicleSeat()
-            if seat then
-                -- 1. ขับไปรับผู้โดยสาร (NPC Customer)
+            local vehiclePart = getVehiclePart()
+            if vehiclePart then
+                -- 1. ไปรับ NPC
                 local npcsFolder = Workspace:FindFirstChild("npcs")
                 if npcsFolder then
                     for _, npc in ipairs(npcsFolder:GetChildren()) do
@@ -171,14 +167,14 @@ task.spawn(function()
                             local npcPart = npc:IsA("BasePart") and npc or npc:FindFirstChildWhichIsA("BasePart", true)
                             if npcPart then
                                 driveToDestination(npcPart.Position)
-                                task.wait(2) -- รอให้ผู้โดยสารขึ้นรถ
+                                task.wait(2)
                                 break
                             end
                         end
                     end
                 end
 
-                -- 2. ขับไปส่งที่จุดหมาย
+                -- 2. ไปส่ง NPC
                 if autoFarmActive then
                     local targetObj = getTargetLocation()
                     if targetObj then
@@ -186,7 +182,7 @@ task.spawn(function()
                         if targetPart then
                             driveToDestination(targetPart.Position)
 
-                            -- ส่งสัญญาณจบงาน
+                            -- ยิง Remote จบงาน
                             local remotes = {"deliveryfinserv", "deliveryfin", "delinterrupt"}
                             for _, remoteName in ipairs(remotes) do
                                 local remote = ReplicatedStorage:FindFirstChild(remoteName, true) or Workspace:FindFirstChild(remoteName, true)
@@ -209,7 +205,7 @@ local ScreenGui = Instance.new("ScreenGui")
 local ToggleButton = Instance.new("TextButton")
 local UICorner = Instance.new("UICorner")
 
-ScreenGui.Name = "AutopilotTaxiGui"
+ScreenGui.Name = "CustomTaxiAutopilotGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
@@ -236,12 +232,6 @@ ToggleButton.MouseButton1Click:Connect(function()
     else
         ToggleButton.Text = "AUTOPILOT FARM: OFF"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-        local seat = getVehicleSeat()
-        if seat then
-            seat.ThrottleFloat = 0
-            seat.SteerFloat = 0
-        end
+        stopVehicle()
     end
 end)
-
-print("Legit Autopilot Loaded!")
