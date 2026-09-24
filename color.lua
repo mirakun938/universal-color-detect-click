@@ -6,14 +6,36 @@ local LocalPlayer = Players.LocalPlayer
 
 -- ==================== ค้นหา Remote Event ====================
 local function getDeliveryRemote()
-    -- ค้นหา deliveryfinserv หรือ deliveryfin จาก ReplicatedStorage และ Workspace
     return ReplicatedStorage:FindFirstChild("deliveryfinserv", true)
         or ReplicatedStorage:FindFirstChild("deliveryfin", true)
         or Workspace:FindFirstChild("deliveryfinserv", true)
         or Workspace:FindFirstChild("deliveryfin", true)
 end
 
--- ==================== ฟังก์ชันยิง Remote ส่งงาน ====================
+-- ==================== ดึงชื่อสถานที่เป้าหมายจาก UI ====================
+local function getCurrentDestination()
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if not playerGui then return nil end
+    
+    -- วนลูปสแกนหาข้อความบอกสถานที่บนหน้าจอผู้เล่น
+    for _, gui in ipairs(playerGui:GetChildren()) do
+        if gui:IsA("ScreenGui") and gui.Enabled then
+            for _, desc in ipairs(gui:GetDescendants()) do
+                if desc:IsA("TextLabel") and desc.Visible and desc.Text ~= "" then
+                    local text = desc.Text
+                    -- ถ้าเจอข้อความเช่น "Go to Taxi Headquarters" หรือ "Go to The Tree Store"
+                    if string.find(string.lower(text), "go to ") then
+                        local destination = string.gsub(text, "[Gg][Oo] [Tt][Oo] ", "")
+                        return destination
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+-- ==================== ฟังก์ชันส่งผู้โดยสารอัตโนมัติ ====================
 local function sendInstantDelivery()
     local remote = getDeliveryRemote()
     
@@ -22,31 +44,39 @@ local function sendInstantDelivery()
         return
     end
 
-    -- ดึงชื่อสถานที่ปลายทาง (ถ้ามี) หรือส่งค่าเปล่า/ชื่อสถานที่ยอดนิยม
-    -- จากคลิป Event รับค่า Argument เป็น string ชื่อสถานที่ เช่น "Taxi Headquarters" หรือ "the Tree Store"
-    local targetLocation = "Taxi Headquarters" 
+    -- หาชื่อสถานที่อัตโนมัติ
+    local destination = getCurrentDestination()
+    
+    if not destination or destination == "" then
+        print("ไม่พบข้อความบอกสถานที่บนหน้าจอ กำลังลองส่งค่าแบบ Auto Scan...")
+        -- กรณีหาไม่เจอจริงๆ จะใช้คำว่า "Taxi Headquarters" เป็น fallback
+        destination = "Taxi Headquarters"
+    else
+        print("พบสถานที่ส่งจากหน้าจอ:", destination)
+    end
 
+    -- ยิง Remote จบงาน
     if remote:IsA("RemoteEvent") then
-        remote:FireServer(targetLocation)
-        print("ยิง RemoteEvent deliveryfinserv สำเร็จ!")
+        remote:FireServer(destination)
+        print("ส่ง RemoteEvent ไปยัง:", destination)
     elseif remote:IsA("BindableEvent") then
-        remote:Fire(targetLocation)
-        print("ยิง BindableEvent deliveryfinserv สำเร็จ!")
+        remote:Fire(destination)
+        print("ส่ง BindableEvent ไปยัง:", destination)
     end
 end
 
--- ==================== UI สร้างปุ่มกดส่งงาน ====================
+-- ==================== UI Controls ====================
 local ScreenGui = Instance.new("ScreenGui")
 local ToggleButton = Instance.new("TextButton")
 local UICorner = Instance.new("UICorner")
 
-ScreenGui.Name = "InstantDeliveryGui"
+ScreenGui.Name = "SmartDeliveryGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
 ToggleButton.Name = "DeliveryButton"
 ToggleButton.Parent = ScreenGui
-ToggleButton.BackgroundColor3 = Color3.fromRGB(0, 200, 100) -- สีเขียว
+ToggleButton.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
 ToggleButton.Position = UDim2.new(0.02, 0, 0.6, 0)
 ToggleButton.Size = UDim2.new(0, 160, 0, 45)
 ToggleButton.Font = Enum.Font.SourceSansBold
@@ -59,9 +89,8 @@ ToggleButton.Draggable = true
 UICorner.CornerRadius = UDim.new(0, 8)
 UICorner.Parent = ToggleButton
 
--- เมื่อคลิกปุ่ม ให้ยิง Remote ทันที
 ToggleButton.MouseButton1Click:Connect(function()
     sendInstantDelivery()
 end)
 
-print("Instant Delivery Remote Script Loaded!")
+print("Smart Instant Delivery Script Loaded!")
