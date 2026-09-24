@@ -4,43 +4,31 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
 local autoFarmActive = false
+local MOVE_SPEED = 50 -- ความเร็วรถ (ปรับตามต้องการ 40-70 กำลังเนียน)
 
--- ฟังก์ชันจำลองการกดปุ่มคีย์บอร์ด (W, A, S, D)
-local function setPedal(key, isPressed)
-    VirtualInputManager:SendKeyEvent(isPressed, key, false, game)
-end
-
--- ฟังก์ชันหยุดรถ (ปล่อยทุกปุ่ม)
-local function stopVehicle()
-    setPedal(Enum.KeyCode.W, false)
-    setPedal(Enum.KeyCode.S, false)
-    setPedal(Enum.KeyCode.A, false)
-    setPedal(Enum.KeyCode.D, false)
-end
-
--- ฟังก์ชันหาตำแหน่งรถ / HumanoidRootPart
-local function getVehiclePart()
+-- ฟังก์ชันดึง Part หลักของรถ
+local function getVehiclePrimaryPart()
     local char = LocalPlayer.Character
     if not char then return nil end
     local hum = char:FindFirstChildOfClass("Humanoid")
     if not hum or not hum.SeatPart then return nil end
     
     local vehicle = hum.SeatPart:FindFirstAncestorOfClass("Model")
-    return vehicle and (vehicle.PrimaryPart or vehicle:FindFirstChildWhichIsA("BasePart")) or char:FindFirstChild("HumanoidRootPart")
+    return vehicle and (vehicle.PrimaryPart or vehicle:FindFirstChildWhichIsA("BasePart")) or hum.SeatPart
 end
 
--- ฟังก์ชันขับรถด้วย Pathfinding + กดปุ่ม W A S D
+-- ฟังก์ชันขับรถไปตาม Path โดยใช้แรงขับเคลื่อน (Physics Driven)
 local function driveToDestination(destinationPos)
-    local vehiclePart = getVehiclePart()
+    local vehiclePart = getVehiclePrimaryPart()
     if not vehiclePart then return false end
 
+    -- สร้าง Pathfinding บนถนน
     local path = PathfindingService:CreatePath({
-        AgentRadius = 8,
-        AgentHeight = 6,
+        AgentRadius = 7,
+        AgentHeight = 5,
         AgentCanJump = false,
     })
 
@@ -54,68 +42,49 @@ local function driveToDestination(destinationPos)
 
     local waypoints = path:GetWaypoints()
     local currentWaypointIndex = 1
-    local lastPos = vehiclePart.Position
-    local stuckTimer = 0
+
+    -- สร้าง BodyVelocity และ BodyGyro บังคับรถ
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(1e5, 0, 1e5)
+    bv.Velocity = Vector3.zero
+    bv.Parent = vehiclePart
+
+    local bg = Instance.new("BodyGyro")
+    bg.MaxTorque = Vector3.new(0, 1e5, 0)
+    bg.P = 10000
+    bg.CFrame = vehiclePart.CFrame
+    bg.Parent = vehiclePart
 
     while autoFarmActive and currentWaypointIndex <= #waypoints do
         RunService.Heartbeat:Wait()
-        vehiclePart = getVehiclePart()
-        if not vehiclePart then break end
+        vehiclePart = getVehiclePrimaryPart()
+        if not vehiclePart or not vehiclePart.Parent then break end
 
         local targetWaypoint = waypoints[currentWaypointIndex]
         local wayPointPos = targetWaypoint.Position
         local currentPos = vehiclePart.Position
 
+        -- คำนวณทิศทางเดินรถ
+        local direction = (Vector3.new(wayPointPos.X, currentPos.Y, wayPointPos.Z) - currentPos).Unit
         local distToWaypoint = (Vector3.new(currentPos.X, 0, currentPos.Z) - Vector3.new(wayPointPos.X, 0, wayPointPos.Z)).Magnitude
 
-        -- ระบบเช็คว่ารถติดหรือไม่
-        if (currentPos - lastPos).Magnitude < 0.5 then
-            stuckTimer = stuckTimer + 0.1
-        else
-            stuckTimer = 0
-        end
-        lastPos = currentPos
+        -- สั่งแรงดันหมุนหัวรถและวิ่งไปข้างหน้า
+        bg.CFrame = CFrame.lookAt(currentPos, Vector3.new(wayPointPos.X, currentPos.Y, wayPointPos.Z))
+        bv.Velocity = direction * MOVE_SPEED
 
-        -- ถ้ารถติด ให้ถอยหลังแก้ตำแหน่ง
-        if stuckTimer > 2.5 then
-            stopVehicle()
-            setPedal(Enum.KeyCode.S, true) -- กด S ถอยหลัง
-            setPedal(Enum.KeyCode.A, true)
-            task.wait(1.5)
-            stopVehicle()
-            setPedal(Enum.KeyCode.W, true) -- กด W ตั้งหลัก
-            task.wait(0.5)
-            stuckTimer = 0
-            break
-        end
-
-        -- บังคับทิศทางเลี้ยว (A / D)
-        local relativeVector = vehiclePart.CFrame:VectorToObjectSpace(wayPointPos - currentPos)
-        if relativeVector.X < -1.5 then
-            setPedal(Enum.KeyCode.A, true)
-            setPedal(Enum.KeyCode.D, false)
-        elseif relativeVector.X > 1.5 then
-            setPedal(Enum.KeyCode.D, true)
-            setPedal(Enum.KeyCode.A, false)
-        else
-            setPedal(Enum.KeyCode.A, false)
-            setPedal(Enum.KeyCode.D, false)
-        end
-
-        -- เหยียบคันเร่งเดินหน้า (W)
-        setPedal(Enum.KeyCode.W, true)
-
-        -- เมื่อถึงจุด Waypoint ถัดไป
-        if distToWaypoint < 14 then
+        -- เมื่อถึง Waypoint ถัดไป
+        if distToWaypoint < 10 then
             currentWaypointIndex = currentWaypointIndex + 1
         end
     end
 
-    stopVehicle()
+    -- หยุดรถและลบ Force ออก
+    if bv then bv:Destroy() end
+    if bg then bg:Destroy() end
     return true
 end
 
--- ฟังก์ชันค้นหาจุดส่ง (Location)
+-- ฟังก์ชันดึงจุดส่งงาน
 local function getTargetLocation()
     local locationsFolder = Workspace:FindFirstChild("locations")
     if not locationsFolder then return nil end
@@ -156,9 +125,9 @@ task.spawn(function()
     while true do
         task.wait(1)
         if autoFarmActive then
-            local vehiclePart = getVehiclePart()
+            local vehiclePart = getVehiclePrimaryPart()
             if vehiclePart then
-                -- 1. ไปรับ NPC
+                -- 1. ขับไปรับ NPC
                 local npcsFolder = Workspace:FindFirstChild("npcs")
                 if npcsFolder then
                     for _, npc in ipairs(npcsFolder:GetChildren()) do
@@ -174,7 +143,7 @@ task.spawn(function()
                     end
                 end
 
-                -- 2. ไปส่ง NPC
+                -- 2. ขับไปส่ง NPC
                 if autoFarmActive then
                     local targetObj = getTargetLocation()
                     if targetObj then
@@ -205,7 +174,7 @@ local ScreenGui = Instance.new("ScreenGui")
 local ToggleButton = Instance.new("TextButton")
 local UICorner = Instance.new("UICorner")
 
-ScreenGui.Name = "CustomTaxiAutopilotGui"
+ScreenGui.Name = "PhysicsAutopilotGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
@@ -232,6 +201,5 @@ ToggleButton.MouseButton1Click:Connect(function()
     else
         ToggleButton.Text = "AUTOPILOT FARM: OFF"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-        stopVehicle()
     end
 end)
