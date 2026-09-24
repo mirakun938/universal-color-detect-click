@@ -7,9 +7,9 @@ local RunService = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 local autoFarmActive = false
-local MOVE_SPEED = 50 -- ความเร็วรถ (ปรับตามต้องการ 40-70 กำลังเนียน)
+local MAGNET_SPEED = 45 -- ความเร็วในการเคลื่อนที่ของแม่เหล็ก (30-60 กำลังเนียน)
 
--- ฟังก์ชันดึง Part หลักของรถ
+-- ฟังก์ชันหา Part หลักของรถ
 local function getVehiclePrimaryPart()
     local char = LocalPlayer.Character
     if not char then return nil end
@@ -20,15 +20,15 @@ local function getVehiclePrimaryPart()
     return vehicle and (vehicle.PrimaryPart or vehicle:FindFirstChildWhichIsA("BasePart")) or hum.SeatPart
 end
 
--- ฟังก์ชันขับรถไปตาม Path โดยใช้แรงขับเคลื่อน (Physics Driven)
-local function driveToDestination(destinationPos)
+-- ฟังก์ชันขับเคลื่อนด้วยระบบแม่เหล็กนำทาง
+local function magnetDriveTo(destinationPos)
     local vehiclePart = getVehiclePrimaryPart()
     if not vehiclePart then return false end
 
-    -- สร้าง Pathfinding บนถนน
+    -- คำนวณเส้นทาง
     local path = PathfindingService:CreatePath({
-        AgentRadius = 7,
-        AgentHeight = 5,
+        AgentRadius = 15,
+        AgentHeight = 6,
         AgentCanJump = false,
     })
 
@@ -41,50 +41,60 @@ local function driveToDestination(destinationPos)
     end
 
     local waypoints = path:GetWaypoints()
-    local currentWaypointIndex = 1
 
-    -- สร้าง BodyVelocity และ BodyGyro บังคับรถ
-    local bv = Instance.new("BodyVelocity")
-    bv.MaxForce = Vector3.new(1e5, 0, 1e5)
-    bv.Velocity = Vector3.zero
-    bv.Parent = vehiclePart
+    -- สร้างจุดแม่เหล็ก (Magnet Node)
+    local magnetPart = Instance.new("Part")
+    magnetPart.Name = "TaxiMagnetNode"
+    magnetPart.Size = Vector3.new(2, 2, 2)
+    magnetPart.Transparency = 1
+    magnetPart.CanCollide = false
+    magnetPart.Anchored = true
+    magnetPart.CFrame = vehiclePart.CFrame
+    magnetPart.Parent = Workspace
+
+    -- สร้างระบบแรงดูดแม่เหล็กติดกับตัวรถ
+    local bp = Instance.new("BodyPosition")
+    bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bp.P = 12500 -- ความแรงในการดึงดูด
+    bp.D = 1000  -- ลดการสั่นสะเทือน
+    bp.Position = magnetPart.Position
+    bp.Parent = vehiclePart
 
     local bg = Instance.new("BodyGyro")
-    bg.MaxTorque = Vector3.new(0, 1e5, 0)
-    bg.P = 10000
+    bg.MaxTorque = Vector3.new(0, math.huge, 0)
+    bg.P = 15000
     bg.CFrame = vehiclePart.CFrame
     bg.Parent = vehiclePart
 
-    while autoFarmActive and currentWaypointIndex <= #waypoints do
-        RunService.Heartbeat:Wait()
-        vehiclePart = getVehiclePrimaryPart()
-        if not vehiclePart or not vehiclePart.Parent then break end
+    -- เลื่อนแม่เหล็กนำทางไปตาม Waypoints
+    for i, wp in ipairs(waypoints) do
+        if not autoFarmActive or not vehiclePart or not vehiclePart.Parent then break end
 
-        local targetWaypoint = waypoints[currentWaypointIndex]
-        local wayPointPos = targetWaypoint.Position
-        local currentPos = vehiclePart.Position
+        local targetPos = wp.Position + Vector3.new(0, 1.5, 0) -- ยกสูงจากพื้นเล็กน้อยป้องกันใต้ท้องรถขูด
+        local startPos = magnetPart.Position
+        local distance = (startPos - targetPos).Magnitude
+        local duration = distance / MAGNET_SPEED
 
-        -- คำนวณทิศทางเดินรถ
-        local direction = (Vector3.new(wayPointPos.X, currentPos.Y, wayPointPos.Z) - currentPos).Unit
-        local distToWaypoint = (Vector3.new(currentPos.X, 0, currentPos.Z) - Vector3.new(wayPointPos.X, 0, wayPointPos.Z)).Magnitude
-
-        -- สั่งแรงดันหมุนหัวรถและวิ่งไปข้างหน้า
-        bg.CFrame = CFrame.lookAt(currentPos, Vector3.new(wayPointPos.X, currentPos.Y, wayPointPos.Z))
-        bv.Velocity = direction * MOVE_SPEED
-
-        -- เมื่อถึง Waypoint ถัดไป
-        if distToWaypoint < 10 then
-            currentWaypointIndex = currentWaypointIndex + 1
+        local startTime = tick()
+        while (tick() - startTime) < duration and autoFarmActive do
+            RunService.Heartbeat:Wait()
+            local alpha = math.min((tick() - startTime) / duration, 1)
+            local currentPos = startPos:Lerp(targetPos, alpha)
+            
+            magnetPart.Position = currentPos
+            bp.Position = currentPos
+            bg.CFrame = CFrame.lookAt(vehiclePart.Position, Vector3.new(targetPos.X, vehiclePart.Position.Y, targetPos.Z))
         end
     end
 
-    -- หยุดรถและลบ Force ออก
-    if bv then bv:Destroy() end
+    -- ทำความสะอาดเมื่อถึงจุดหมาย
+    if bp then bp:Destroy() end
     if bg then bg:Destroy() end
+    if magnetPart then magnetPart:Destroy() end
     return true
 end
 
--- ฟังก์ชันดึงจุดส่งงาน
+-- ฟังก์ชันค้นหาเป้าหมายส่งงาน
 local function getTargetLocation()
     local locationsFolder = Workspace:FindFirstChild("locations")
     if not locationsFolder then return nil end
@@ -127,7 +137,7 @@ task.spawn(function()
         if autoFarmActive then
             local vehiclePart = getVehiclePrimaryPart()
             if vehiclePart then
-                -- 1. ขับไปรับ NPC
+                -- 1. ไปรับ NPC
                 local npcsFolder = Workspace:FindFirstChild("npcs")
                 if npcsFolder then
                     for _, npc in ipairs(npcsFolder:GetChildren()) do
@@ -135,7 +145,7 @@ task.spawn(function()
                         if npc.Name == "Customer" or string.find(string.lower(npc.Name), "customer") then
                             local npcPart = npc:IsA("BasePart") and npc or npc:FindFirstChildWhichIsA("BasePart", true)
                             if npcPart then
-                                driveToDestination(npcPart.Position)
+                                magnetDriveTo(npcPart.Position)
                                 task.wait(2)
                                 break
                             end
@@ -143,13 +153,13 @@ task.spawn(function()
                     end
                 end
 
-                -- 2. ขับไปส่ง NPC
+                -- 2. ไปส่ง NPC
                 if autoFarmActive then
                     local targetObj = getTargetLocation()
                     if targetObj then
                         local targetPart = targetObj:IsA("BasePart") and targetObj or targetObj:FindFirstChildWhichIsA("BasePart", true)
                         if targetPart then
-                            driveToDestination(targetPart.Position)
+                            magnetDriveTo(targetPart.Position)
 
                             -- ยิง Remote จบงาน
                             local remotes = {"deliveryfinserv", "deliveryfin", "delinterrupt"}
@@ -169,22 +179,22 @@ task.spawn(function()
     end
 end)
 
--- GUI Toggle Button
+-- UI Toggle Button
 local ScreenGui = Instance.new("ScreenGui")
 local ToggleButton = Instance.new("TextButton")
 local UICorner = Instance.new("UICorner")
 
-ScreenGui.Name = "PhysicsAutopilotGui"
+ScreenGui.Name = "MagnetTaxiGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
-ToggleButton.Name = "AutopilotBtn"
+ToggleButton.Name = "MagnetBtn"
 ToggleButton.Parent = ScreenGui
 ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
 ToggleButton.Position = UDim2.new(0.02, 0, 0.45, 0)
 ToggleButton.Size = UDim2.new(0, 190, 0, 50)
 ToggleButton.Font = Enum.Font.SourceSansBold
-ToggleButton.Text = "AUTOPILOT FARM: OFF"
+ToggleButton.Text = "MAGNET FARM: OFF"
 ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 ToggleButton.TextSize = 14.00
 ToggleButton.Active = true
@@ -196,10 +206,10 @@ UICorner.Parent = ToggleButton
 ToggleButton.MouseButton1Click:Connect(function()
     autoFarmActive = not autoFarmActive
     if autoFarmActive then
-        ToggleButton.Text = "AUTOPILOT FARM: ON"
+        ToggleButton.Text = "MAGNET FARM: ON"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
     else
-        ToggleButton.Text = "AUTOPILOT FARM: OFF"
+        ToggleButton.Text = "MAGNET FARM: OFF"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
     end
 end)
