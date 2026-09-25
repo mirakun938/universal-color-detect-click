@@ -6,8 +6,8 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 local autoFarmActive = false
 
--- กำหนดระยะตรวจจับ Player คนอื่น (150 Studs)
-local PLAYER_SAFE_DISTANCE = 150
+-- กำหนดระยะตรวจจับ NPC (150 Studs)
+local NPC_SAFE_DISTANCE = 150
 
 -- พิกัดจุดทางลัด
 local SHORTCUT_POS = Vector3.new(-135.0, 5.7, 3447.1)
@@ -38,16 +38,37 @@ local function getVehicleModel()
     return vehicle, rootPart
 end
 
--- ฟังก์ชันเช็กว่ามี Player คนอื่น (ที่ไม่ใช่เรา) อยู่ใกล้ตำแหน่งที่กำหนดหรือไม่
-local function isPlayerNearbyPos(targetPos, range)
-    range = range or PLAYER_SAFE_DISTANCE
+-- 1. ฟังก์ชันเช็กว่ากล้องของผู้เล่นอื่นมองมาทางรถเราอยู่หรือไม่ (SCP-173 Style)
+local function isAnyPlayerLookingAtUs()
+    local _, myRoot = getVehicleModel()
+    if not myRoot then return false end
+
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             local pRoot = player.Character:FindFirstChild("HumanoidRootPart") or player.Character:FindFirstChildWhichIsA("BasePart")
             if pRoot then
-                local dist = (pRoot.Position - targetPos).Magnitude
-                if dist <= range then
-                    return true -- มี Player คนอื่นอยู่ใกล้
+                -- เช็กระยะทางเบื้องต้น (ถ้าระยะไกลเกิน 300 Studs กล้องจะมองไม่เห็นตัวรถชัด)
+                local dist = (pRoot.Position - myRoot.Position).Magnitude
+                if dist <= 300 then
+                    -- คำนวณทิศทางที่ Player หันหน้าไป
+                    local lookVector = pRoot.CFrame.LookVector
+                    local dirToUs = (myRoot.Position - pRoot.Position).Unit
+                    
+                    -- Dot Product: ถ้าค่า > 0.3 แสดงว่ามุมมองหันมาทางเรา (FOV ~ 140 องศา)
+                    local dot = lookVector:Dot(dirToUs)
+                    if dot > 0.3 then
+                        -- ใช้ Raycast เช็กว่ามีตึก/กำแพง บังอยู่หรือไม่
+                        local rayParams = RaycastParams.new()
+                        rayParams.FilterType = RaycastFilterType.Exclude
+                        rayParams.FilterDescendantsInstances = {player.Character, myRoot.Parent}
+                        
+                        local rayResult = Workspace:Raycast(pRoot.Position, (myRoot.Position - pRoot.Position), rayParams)
+                        
+                        -- ถ้าไม่มีอะไรบัง Raycast แสดงว่าผู้เล่นคนนั้นมองเห็นเราตรงๆ!
+                        if not rayResult then
+                            return true 
+                        end
+                    end
                 end
             end
         end
@@ -55,8 +76,32 @@ local function isPlayerNearbyPos(targetPos, range)
     return false
 end
 
--- Safe Teleport
+-- 2. ฟังก์ชันเช็กระยะ NPC (ใช้ระยะ 150 Studs เดิม)
+local function isPlayerNearNPC(npcPos)
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            local pRoot = player.Character:FindFirstChild("HumanoidRootPart") or player.Character:FindFirstChildWhichIsA("BasePart")
+            if pRoot then
+                if (pRoot.Position - npcPos).Magnitude <= NPC_SAFE_DISTANCE then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+-- รอจนกว่าจะไม่มีใครมองมาทางเรา (SCP-173 Mechanism)
+local function waitUntilUnseen()
+    while autoFarmActive and isAnyPlayerLookingAtUs() do
+        task.wait(0.5)
+    end
+end
+
+-- Safe Teleport (เช็กการมองเห็นก่อนวาร์ป)
 local function safeTeleport(targetPos)
+    waitUntilUnseen() -- รอจนกว่าจะไม่มีใครมอง
+    
     local vehicle, rootPart = getVehicleModel()
     if not rootPart then return false end
 
@@ -174,64 +219,69 @@ local function getTargetLocation()
     return locationsFolder:GetChildren()[1]
 end
 
+-- 3. ฟังก์ชันค้นหาและรับผู้โดยสาร (ใช้ร่วมกันทั้งตอนเริ่มต้นและหลังส่งงานเสร็จ)
+local function tryPickupPassenger()
+    local vehicle, rootPart = getVehicleModel()
+    if not rootPart then return false end
+
+    local npcsFolder = Workspace:FindFirstChild("npcs")
+    if not npcsFolder then return false end
+
+    for _, npc in ipairs(npcsFolder:GetChildren()) do
+        if not autoFarmActive then break end
+        
+        local isCustomer = (npc.Name == "Customer" or string.find(string.lower(npc.Name), "customer"))
+        if isCustomer then
+            local npcPart = npc:IsA("BasePart") and npc or npc:FindFirstChildWhichIsA("BasePart", true)
+            
+            -- เช็กว่าไม่มี Player คนอื่นอยู่ในระยะ 150 Studs รอบตัว NPC
+            if npcPart and not isPlayerNearNPC(npcPart.Position) then
+                
+                -- วาร์ปไปจอดข้าง NPC
+                safeTeleport(npcPart.Position + Vector3.new(3, 0, 0))
+                
+                -- จอดนิ่งรอผู้โดยสารขึ้นรถ (Timeout 15 วินาที)
+                local startTime = tick()
+                while (tick() - startTime) < 15 and autoFarmActive do
+                    task.wait(0.5)
+                    if rootPart then
+                        rootPart.AssemblyLinearVelocity = Vector3.zero
+                        rootPart.AssemblyAngularVelocity = Vector3.zero
+                    end
+
+                    local qStatus = checkQuestStatus()
+                    if qStatus.hasPassengerOnBoard then
+                        return true -- รับผู้โดยสารสำเร็จ!
+                    end
+                end
+            end
+        end
+    end
+    return false
+end
+
 -- Main Loop
 task.spawn(function()
     while true do
         task.wait(0.5)
-        if autoFarmActive then
+        if autoFarmActive do
             local vehicle, rootPart = getVehicleModel()
             if rootPart then
                 
-                -- Step 1: ค้นหาและวาร์ปไปรับ NPC
-                local passengerSeated = false
-                local npcsFolder = Workspace:FindFirstChild("npcs")
-                
-                if npcsFolder then
-                    for _, npc in ipairs(npcsFolder:GetChildren()) do
-                        if not autoFarmActive then break end
-                        
-                        local isCustomer = (npc.Name == "Customer" or string.find(string.lower(npc.Name), "customer"))
-                        
-                        if isCustomer then
-                            local npcPart = npc:IsA("BasePart") and npc or npc:FindFirstChildWhichIsA("BasePart", true)
-                            
-                            -- เช็กว่าไม่มี Player คนอื่นอยู่ในระยะ 150 Studs รอบตัว NPC
-                            if npcPart and not isPlayerNearbyPos(npcPart.Position, 150) then
-                                
-                                -- วาร์ปไปจอดข้างๆ NPC
-                                safeTeleport(npcPart.Position + Vector3.new(3, 0, 0))
-                                
-                                -- Step 2: จอดนิ่งๆ รอผู้โดยสารขึ้นรถ (Timeout 15 วินาที)
-                                local startTime = tick()
-                                while (tick() - startTime) < 15 and autoFarmActive do
-                                    task.wait(0.5)
-                                    
-                                    -- ล็อกความเร็วรถให้หยุดนิ่งเพื่อความปลอดภัย
-                                    if rootPart then
-                                        rootPart.AssemblyLinearVelocity = Vector3.zero
-                                        rootPart.AssemblyAngularVelocity = Vector3.zero
-                                    end
+                -- เช็กก่อนว่ามีผู้โดยสารบนรถอยู่แล้วหรือไม่ (กรณีรับจากจุดส่งงานเดิม)
+                local qStatus = checkQuestStatus()
+                local passengerSeated = qStatus.hasPassengerOnBoard
 
-                                    local qStatus = checkQuestStatus()
-                                    if qStatus.hasPassengerOnBoard then
-                                        passengerSeated = true
-                                        break
-                                    end
-                                end
-
-                                if passengerSeated then
-                                    break -- ขึ้นรถสำเร็จ หลุดจากลูปหา NPC
-                                end
-                            end
-                        end
-                    end
+                -- ถ้ารถยังว่างอยู่ ให้ไปรับผู้โดยสาร
+                if not passengerSeated then
+                    passengerSeated = tryPickupPassenger()
                 end
 
-                -- Step 3: ทำเควสจนกว่าข้อความจะเปลี่ยนเป็นสีเขียว
+                -- ถ้ามีผู้โดยสารขึ้นรถแล้ว ให้เริ่มทำเควสและส่งงาน
                 if autoFarmActive and passengerSeated then
                     local attempts = 0
                     while autoFarmActive and attempts < 12 do
-                        local qStatus = checkQuestStatus()
+                        qStatus = checkQuestStatus()
                         
                         local topSpeedReady = not qStatus.hasTopSpeedQuest or qStatus.isTopSpeedDone
                         local shortcutReady = not qStatus.hasShortcutQuest or qStatus.isShortcutDone
@@ -263,7 +313,7 @@ task.spawn(function()
                         task.wait(0.3)
                     end
 
-                    -- Step 4: วาร์ปไปส่งงานทันทีหลังเควสเขียว
+                    -- วาร์ปไปส่งงานปลายทาง
                     local targetObj = getTargetLocation()
                     if targetObj then
                         local targetPart = targetObj:IsA("BasePart") and targetObj or targetObj:FindFirstChildWhichIsA("BasePart", true)
@@ -280,11 +330,16 @@ task.spawn(function()
                                     remote:FireServer()
                                 end
                             end
+                            
+                            task.wait(0.5)
+                            
+                            -- หลังส่งผู้โดยสารเสร็จ ตรวจหาผู้โดยสารใกล้ๆ จุดส่งเพื่อรับต่อเนื่องทันที!
+                            tryPickupPassenger()
                         end
                     end
                 end
 
-                task.wait(1.5)
+                task.wait(1.0)
             end
         end
     end
@@ -295,17 +350,17 @@ local ScreenGui = Instance.new("ScreenGui")
 local ToggleButton = Instance.new("TextButton")
 local UICorner = Instance.new("UICorner")
 
-ScreenGui.Name = "FixPickup150TPGui"
+ScreenGui.Name = "SCP173ChainedTPGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
-ToggleButton.Name = "TPFix150Btn"
+ToggleButton.Name = "TPSCPBtn"
 ToggleButton.Parent = ScreenGui
 ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
 ToggleButton.Position = UDim2.new(0.02, 0, 0.45, 0)
 ToggleButton.Size = UDim2.new(0, 210, 0, 50)
 ToggleButton.Font = Enum.Font.SourceSansBold
-ToggleButton.Text = "STABLE 150m TP: OFF"
+ToggleButton.Text = "SCP-173 CHAIN TP: OFF"
 ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 ToggleButton.TextSize = 14.00
 ToggleButton.Active = true
@@ -317,10 +372,11 @@ UICorner.Parent = ToggleButton
 ToggleButton.MouseButton1Click:Connect(function()
     autoFarmActive = not autoFarmActive
     if autoFarmActive then
-        ToggleButton.Text = "STABLE 150m TP: ON"
+        ToggleButton.Text = "SCP-173 CHAIN TP: ON"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
     else
-        ToggleButton.Text = "STABLE 150m TP: OFF"
+        ToggleButton.Text = "SCP-173 CHAIN TP: OFF"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
     end
 end)
+    
