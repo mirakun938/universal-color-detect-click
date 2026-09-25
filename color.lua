@@ -6,10 +6,9 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 local autoFarmActive = false
 
--- ==================== [ตั้งค่าระยะทาง] ====================
-local PLAYER_SAFE_DISTANCE = 300 -- ระยะตรวจจับ Player คนอื่นรอบตัวเรา (300 Studs)
-local NPC_SAFE_DISTANCE = 150    -- ระยะตรวจจับ NPC/Player รอบ NPC (150 Studs)
--- =======================================================
+-- กำหนดระยะตรวจจับ
+local PLAYER_SAFE_DISTANCE = 300 -- ระยะปลอดภัยจาก Player คนอื่นรอบตัวเรา (300 Studs)
+local NPC_SAFE_DISTANCE = 150    -- ระยะตรวจจับ Player รอบ NPC (150 Studs)
 
 -- พิกัดจุดทางลัด
 local SHORTCUT_POS = Vector3.new(-135.0, 5.7, 3447.1)
@@ -40,15 +39,15 @@ local function getVehicleModel()
     return vehicle, rootPart
 end
 
--- เช็กว่ามี Player คนอื่นอยู่ใกล้ตำแหน่งที่กำหนดหรือไม่
-local function isPlayerNearby(targetPos, range)
+-- ฟังก์ชันเช็กว่ามี Player คนอื่น (ที่ไม่ใช่เรา) อยู่ใกล้ตำแหน่งที่กำหนดหรือไม่
+local function isPlayerNearbyPos(targetPos, range)
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             local pRoot = player.Character:FindFirstChild("HumanoidRootPart") or player.Character:FindFirstChildWhichIsA("BasePart")
             if pRoot then
                 local dist = (pRoot.Position - targetPos).Magnitude
                 if dist <= range then
-                    return true -- มี Player คนอื่นอยู่ในระยะ
+                    return true -- มี Player คนอื่นอยู่ใกล้
                 end
             end
         end
@@ -56,24 +55,17 @@ local function isPlayerNearby(targetPos, range)
     return false
 end
 
--- รอตราบใดที่มี Player คนอื่นอยู่ในระยะ 300 Studs รอบตัวรถเรา
-local function waitUntilAreaClear()
-    while autoFarmActive do
-        local _, rootPart = getVehicleModel()
-        if rootPart and isPlayerNearby(rootPart.Position, PLAYER_SAFE_DISTANCE) then
-            task.wait(0.5)
-        else
-            break
-        end
-    end
-end
-
--- Safe Teleport
+-- Safe Teleport (เพิ่มการเช็กระยะ Player 300 Studs ก่อนวาร์ป)
 local function safeTeleport(targetPos)
-    waitUntilAreaClear() -- เช็กระยะ 300 Studs รอบตัวเราก่อนวาร์ป
-    
     local vehicle, rootPart = getVehicleModel()
     if not rootPart then return false end
+
+    -- เช็กว่ามี Player คนอื่นอยู่ใกล้ตัวรถเราในระยะ 300 Studs หรือไม่ ถ้ารถอยู่ใกล้คนอื่นให้รอก่อน
+    while autoFarmActive and isPlayerNearbyPos(rootPart.Position, PLAYER_SAFE_DISTANCE) do
+        task.wait(0.5)
+        vehicle, rootPart = getVehicleModel()
+        if not rootPart then return false end
+    end
 
     local partsToDisable = {}
     if vehicle then
@@ -110,7 +102,7 @@ local function safeTeleport(targetPos)
     return true
 end
 
--- ตรวจจับสถานะเควส
+-- ตรวจจับสถานะเควส (เช็ก UI)
 local function checkQuestStatus()
     local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
     local status = {
@@ -153,7 +145,7 @@ local function checkQuestStatus()
     return status
 end
 
--- ค้นหาจุดหมาย
+-- ค้นหาจุดหมายปลายทาง
 local function getTargetLocation()
     local locationsFolder = Workspace:FindFirstChild("locations")
     if not locationsFolder then return nil end
@@ -189,44 +181,6 @@ local function getTargetLocation()
     return locationsFolder:GetChildren()[1]
 end
 
--- รับผู้โดยสาร
-local function tryPickupPassenger()
-    local vehicle, rootPart = getVehicleModel()
-    if not rootPart then return false end
-
-    local npcsFolder = Workspace:FindFirstChild("npcs")
-    if not npcsFolder then return false end
-
-    for _, npc in ipairs(npcsFolder:GetChildren()) do
-        if not autoFarmActive then break end
-        
-        local isCustomer = (npc.Name == "Customer" or string.find(string.lower(npc.Name), "customer"))
-        if isCustomer then
-            local npcPart = npc:IsA("BasePart") and npc or npc:FindFirstChildWhichIsA("BasePart", true)
-            
-            -- เช็กระยะ NPC 150 Studs
-            if npcPart and not isPlayerNearby(npcPart.Position, NPC_SAFE_DISTANCE) then
-                safeTeleport(npcPart.Position + Vector3.new(3, 0, 0))
-                
-                local startTime = tick()
-                while (tick() - startTime) < 15 and autoFarmActive do
-                    task.wait(0.5)
-                    if rootPart then
-                        rootPart.AssemblyLinearVelocity = Vector3.zero
-                        rootPart.AssemblyAngularVelocity = Vector3.zero
-                    end
-
-                    local qStatus = checkQuestStatus()
-                    if qStatus.hasPassengerOnBoard then
-                        return true
-                    end
-                end
-            end
-        end
-    end
-    return false
-end
-
 -- Main Loop
 task.spawn(function()
     while true do
@@ -235,17 +189,56 @@ task.spawn(function()
             local vehicle, rootPart = getVehicleModel()
             if rootPart then
                 
-                local qStatus = checkQuestStatus()
-                local passengerSeated = qStatus.hasPassengerOnBoard
+                -- Step 1: ค้นหาและวาร์ปไปรับ NPC
+                local passengerSeated = false
+                local npcsFolder = Workspace:FindFirstChild("npcs")
+                
+                if npcsFolder then
+                    for _, npc in ipairs(npcsFolder:GetChildren()) do
+                        if not autoFarmActive then break end
+                        
+                        local isCustomer = (npc.Name == "Customer" or string.find(string.lower(npc.Name), "customer"))
+                        
+                        if isCustomer then
+                            local npcPart = npc:IsA("BasePart") and npc or npc:FindFirstChildWhichIsA("BasePart", true)
+                            
+                            -- เช็กว่าไม่มี Player คนอื่นอยู่ในระยะ 150 Studs รอบตัว NPC
+                            if npcPart and not isPlayerNearbyPos(npcPart.Position, NPC_SAFE_DISTANCE) then
+                                
+                                -- วาร์ปไปจอดข้างๆ NPC
+                                safeTeleport(npcPart.Position + Vector3.new(3, 0, 0))
+                                
+                                -- Step 2: จอดนิ่งๆ รอผู้โดยสารขึ้นรถ (Timeout 15 วินาที)
+                                local startTime = tick()
+                                while (tick() - startTime) < 15 and autoFarmActive do
+                                    task.wait(0.5)
+                                    
+                                    -- ล็อกความเร็วรถให้หยุดนิ่งเพื่อความปลอดภัย
+                                    if rootPart then
+                                        rootPart.AssemblyLinearVelocity = Vector3.zero
+                                        rootPart.AssemblyAngularVelocity = Vector3.zero
+                                    end
 
-                if not passengerSeated then
-                    passengerSeated = tryPickupPassenger()
+                                    local qStatus = checkQuestStatus()
+                                    if qStatus.hasPassengerOnBoard then
+                                        passengerSeated = true
+                                        break
+                                    end
+                                end
+
+                                if passengerSeated then
+                                    break -- ขึ้นรถสำเร็จ หลุดจากลูปหา NPC
+                                end
+                            end
+                        end
+                    end
                 end
 
+                -- Step 3: ทำเควสจนกว่าข้อความจะเปลี่ยนเป็นสีเขียว
                 if autoFarmActive and passengerSeated then
                     local attempts = 0
                     while autoFarmActive and attempts < 12 do
-                        qStatus = checkQuestStatus()
+                        local qStatus = checkQuestStatus()
                         
                         local topSpeedReady = not qStatus.hasTopSpeedQuest or qStatus.isTopSpeedDone
                         local shortcutReady = not qStatus.hasShortcutQuest or qStatus.isShortcutDone
@@ -254,6 +247,7 @@ task.spawn(function()
                             break
                         end
 
+                        -- ทำเควส Top Speed
                         if qStatus.hasTopSpeedQuest and not qStatus.isTopSpeedDone then
                             local currentPos = rootPart.Position
                             safeTeleport(currentPos + Vector3.new(0, 850, 0))
@@ -266,6 +260,7 @@ task.spawn(function()
                             task.wait(0.8)
                         end
 
+                        -- ทำเควส Shortcut
                         if qStatus.hasShortcutQuest and not qStatus.isShortcutDone then
                             safeTeleport(SHORTCUT_POS)
                             task.wait(0.5)
@@ -275,6 +270,7 @@ task.spawn(function()
                         task.wait(0.3)
                     end
 
+                    -- Step 4: วาร์ปไปส่งงานทันทีหลังเควสเขียว
                     local targetObj = getTargetLocation()
                     if targetObj then
                         local targetPart = targetObj:IsA("BasePart") and targetObj or targetObj:FindFirstChildWhichIsA("BasePart", true)
@@ -282,6 +278,7 @@ task.spawn(function()
                             safeTeleport(targetPart.Position)
                             task.wait(0.5)
 
+                            -- ยิง Remote จบงาน
                             local remotes = {"deliveryfinserv", "deliveryfin", "delinterrupt"}
                             for _, remoteName in ipairs(remotes) do
                                 local remote = ReplicatedStorage:FindFirstChild(remoteName, true) or Workspace:FindFirstChild(remoteName, true)
@@ -290,72 +287,48 @@ task.spawn(function()
                                     remote:FireServer()
                                 end
                             end
-                            
-                            task.wait(0.5)
-                            tryPickupPassenger()
                         end
                     end
                 end
 
-                task.wait(1.0)
+                task.wait(1.5)
             end
         end
     end
 end)
 
--- ==================== [ส่วนการสร้าง UI แบบเซฟที่สุด] ====================
-local guiName = "FixedDistAutoFarmGui"
+-- UI Toggle Button (โครงสร้างเดิมที่ทำงานได้)
+local ScreenGui = Instance.new("ScreenGui")
+local ToggleButton = Instance.new("TextButton")
+local UICorner = Instance.new("UICorner")
 
-local function createUI(parent)
-    if not parent then return end
-    if parent:FindFirstChild(guiName) then
-        parent[guiName]:Destroy()
+ScreenGui.Name = "FixPickup150TPGui"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
+
+ToggleButton.Name = "TPFix150Btn"
+ToggleButton.Parent = ScreenGui
+ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+ToggleButton.Position = UDim2.new(0.02, 0, 0.45, 0)
+ToggleButton.Size = UDim2.new(0, 210, 0, 50)
+ToggleButton.Font = Enum.Font.SourceSansBold
+ToggleButton.Text = "STABLE 150m TP: OFF"
+ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleButton.TextSize = 14.00
+ToggleButton.Active = true
+ToggleButton.Draggable = true
+
+UICorner.CornerRadius = UDim.new(0, 8)
+UICorner.Parent = ToggleButton
+
+ToggleButton.MouseButton1Click:Connect(function()
+    autoFarmActive = not autoFarmActive
+    if autoFarmActive then
+        ToggleButton.Text = "STABLE 150m TP: ON"
+        ToggleButton.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
+    else
+        ToggleButton.Text = "STABLE 150m TP: OFF"
+        ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
     end
-
-    local ScreenGui = Instance.new("ScreenGui")
-    local ToggleButton = Instance.new("TextButton")
-    local UICorner = Instance.new("UICorner")
-
-    ScreenGui.Name = guiName
-    ScreenGui.ResetOnSpawn = false
-    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    ScreenGui.Parent = parent
-
-    ToggleButton.Name = "TPMainBtn"
-    ToggleButton.Parent = ScreenGui
-    ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-    ToggleButton.Position = UDim2.new(0.05, 0, 0.35, 0)
-    ToggleButton.Size = UDim2.new(0, 220, 0, 55)
-    ToggleButton.Font = Enum.Font.SourceSansBold
-    ToggleButton.Text = "AUTO FARM (P:300m/NPC:150m): OFF"
-    ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-    ToggleButton.TextSize = 14.00
-    ToggleButton.Active = true
-    ToggleButton.Draggable = true
-
-    UICorner.CornerRadius = UDim.new(0, 10)
-    UICorner.Parent = ToggleButton
-
-    ToggleButton.MouseButton1Click:Connect(function()
-        autoFarmActive = not autoFarmActive
-        if autoFarmActive then
-            ToggleButton.Text = "AUTO FARM (P:300m/NPC:150m): ON"
-            ToggleButton.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
-        else
-            ToggleButton.Text = "AUTO FARM (P:300m/NPC:150m): OFF"
-            ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-        end
-    end)
-end
-
--- สร้าง UI รองรับหลายสภาพแวดล้อม
-if gethui then
-    createUI(gethui())
-elseif CoreGui then
-    createUI(CoreGui)
-end
-
-if LocalPlayer:FindFirstChild("PlayerGui") then
-    createUI(LocalPlayer.PlayerGui)
-    end
+end)
     
