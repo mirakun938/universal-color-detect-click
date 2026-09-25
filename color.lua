@@ -75,15 +75,18 @@ local function safeTeleport(targetPos)
     return true
 end
 
--- ตรวจสอบเงื่อนไขเควสจาก Text Label บน UI
-local function checkQuestRequirements()
+-- ตรวจจับสถานะเควส (เช็คว่าขึ้นสีเขียวหรือยัง)
+local function checkQuestStatus()
     local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    local reqs = {
-        shortcut = "none",
-        needsTopSpeed = false
+    local status = {
+        hasTopSpeedQuest = false,
+        isTopSpeedDone = false,
+        hasShortcutQuest = false,
+        isShortcutDone = false,
+        noShortcut = false
     }
 
-    if not playerGui then return reqs end
+    if not playerGui then return status end
 
     for _, gui in ipairs(playerGui:GetChildren()) do
         if gui:IsA("ScreenGui") and gui.Enabled then
@@ -91,22 +94,29 @@ local function checkQuestRequirements()
                 if desc:IsA("TextLabel") and desc.Visible and desc.Text ~= "" then
                     local txt = desc.Text:lower()
                     
-                    -- เช็คเควส Top Speed
+                    -- เช็ค Top Speed
                     if string.find(txt, "top speed") or string.find(txt, "maximum speed") or string.find(txt, "reach your taxi") then
-                        reqs.needsTopSpeed = true
+                        status.hasTopSpeedQuest = true
+                        -- เช็คว่าตัวหนังสือเป็นสีเขียว (Color3.fromRGB(0, 255, 0) หรือใกล้เคียง) หรือมีคำว่า Completed
+                        if desc.TextColor3.G > 0.6 and desc.TextColor3.R < 0.4 then
+                            status.isTopSpeedDone = true
+                        end
                     end
                     
-                    -- เช็คเควส Shortcut
-                    if string.find(txt, "don't take any shortcuts") or string.find(txt, "dont take") then
-                        reqs.shortcut = "no_shortcut"
-                    elseif string.find(txt, "take a shortcut") then
-                        reqs.shortcut = "use_shortcut"
+                    -- เช็ค Shortcut
+                    if string.find(txt, "take a shortcut") and not string.find(txt, "don't") and not string.find(txt, "dont") then
+                        status.hasShortcutQuest = true
+                        if desc.TextColor3.G > 0.6 and desc.TextColor3.R < 0.4 then
+                            status.isShortcutDone = true
+                        end
+                    elseif string.find(txt, "don't take any shortcuts") or string.find(txt, "dont take") then
+                        status.noShortcut = true
                     end
                 end
             end
         end
     end
-    return reqs
+    return status
 end
 
 -- ค้นหาจุดหมายปลายทาง
@@ -168,40 +178,52 @@ task.spawn(function()
                     end
                 end
 
-                -- 2. เช็คเควส & ทำตามเงื่อนไข
+                -- 2. เคลียร์เงื่อนไขให้ขึ้นสีเขียวทั้งหมดก่อน
                 if autoFarmActive then
-                    local reqs = checkQuestRequirements()
-                    
-                    -- ทำเควส Top Speed ด้วยการวาร์ปขึ้นฟ้าแล้วดิ่งลงมา
-                    if reqs.needsTopSpeed then
-                        local currentPos = rootPart.Position
-                        safeTeleport(currentPos + Vector3.new(0, 800, 0))
+                    local attempts = 0
+                    while autoFarmActive and attempts < 10 do
+                        local qStatus = checkQuestStatus()
                         
-                        -- เร่งความเร็วตกตามธรรมชาติ
-                        task.wait(0.2)
-                        for _, part in ipairs(vehicle and vehicle:GetDescendants() or {rootPart}) do
-                            if part:IsA("BasePart") then
-                                part.AssemblyLinearVelocity = Vector3.new(0, -350, 0)
-                            end
+                        -- เช็คว่าเควสที่มีอยู่สำเร็จ (เป็นสีเขียว) ครบหรือยัง
+                        local topSpeedReady = not qStatus.hasTopSpeedQuest or qStatus.isTopSpeedDone
+                        local shortcutReady = not qStatus.hasShortcutQuest or qStatus.isShortcutDone
+                        
+                        if topSpeedReady and shortcutReady then
+                            break -- ถ้าเขียวหมดแล้ว หลุดจากลูปไปส่งได้เลย!
                         end
-                        task.wait(0.8)
-                    end
 
-                    -- ทำเควส Shortcut
-                    if reqs.shortcut == "use_shortcut" then
-                        safeTeleport(SHORTCUT_POS)
-                        task.wait(0.5)
+                        -- ทำเควส Top Speed หากยังไม่เขียว
+                        if qStatus.hasTopSpeedQuest and not qStatus.isTopSpeedDone then
+                            local currentPos = rootPart.Position
+                            safeTeleport(currentPos + Vector3.new(0, 900, 0))
+                            task.wait(0.2)
+                            for _, part in ipairs(vehicle and vehicle:GetDescendants() or {rootPart}) do
+                                if part:IsA("BasePart") then
+                                    part.AssemblyLinearVelocity = Vector3.new(0, -450, 0)
+                                end
+                            end
+                            task.wait(0.8)
+                        end
+
+                        -- ทำเควส Shortcut หากยังไม่เขียว
+                        if qStatus.hasShortcutQuest and not qStatus.isShortcutDone then
+                            safeTeleport(SHORTCUT_POS)
+                            task.wait(0.5)
+                        end
+
+                        attempts = attempts + 1
+                        task.wait(0.3)
                     end
                 end
 
-                -- 3. วาร์ปไปจุดส่งงาน
+                -- 3. วาร์ปไปส่งงานทันทีหลังเงื่อนไขเขียวแล้ว
                 if autoFarmActive then
                     local targetObj = getTargetLocation()
                     if targetObj then
                         local targetPart = targetObj:IsA("BasePart") and targetObj or targetObj:FindFirstChildWhichIsA("BasePart", true)
                         if targetPart then
                             safeTeleport(targetPart.Position)
-                            task.wait(0.6)
+                            task.wait(0.5)
 
                             -- ยิง Remote จบงาน
                             local remotes = {"deliveryfinserv", "deliveryfin", "delinterrupt"}
@@ -226,17 +248,17 @@ local ScreenGui = Instance.new("ScreenGui")
 local ToggleButton = Instance.new("TextButton")
 local UICorner = Instance.new("UICorner")
 
-ScreenGui.Name = "AutoPerfectFarmGui"
+ScreenGui.Name = "GreenCheckPerfectTPGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
-ToggleButton.Name = "TPPerfectBtn"
+ToggleButton.Name = "TPGreenBtn"
 ToggleButton.Parent = ScreenGui
 ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
 ToggleButton.Position = UDim2.new(0.02, 0, 0.45, 0)
-ToggleButton.Size = UDim2.new(0, 200, 0, 50)
+ToggleButton.Size = UDim2.new(0, 210, 0, 50)
 ToggleButton.Font = Enum.Font.SourceSansBold
-ToggleButton.Text = "AUTO PERFECT TP: OFF"
+ToggleButton.Text = "WAIT GREEN & TP: OFF"
 ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 ToggleButton.TextSize = 14.00
 ToggleButton.Active = true
@@ -248,10 +270,10 @@ UICorner.Parent = ToggleButton
 ToggleButton.MouseButton1Click:Connect(function()
     autoFarmActive = not autoFarmActive
     if autoFarmActive then
-        ToggleButton.Text = "AUTO PERFECT TP: ON"
+        ToggleButton.Text = "WAIT GREEN & TP: ON"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
     else
-        ToggleButton.Text = "AUTO PERFECT TP: OFF"
+        ToggleButton.Text = "WAIT GREEN & TP: OFF"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
     end
 end)
