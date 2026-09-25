@@ -38,7 +38,7 @@ local function getVehicleModel()
     return vehicle, rootPart
 end
 
--- ฟังก์ชันเช็กว่ามี Player คนอื่นอยู่ใกล้ตำแหน่งที่กำหนดหรือไม่ (ระยะ 150 Studs)
+-- ฟังก์ชันเช็กว่ามี Player คนอื่น (ที่ไม่ใช่เรา) อยู่ใกล้ตำแหน่งที่กำหนดหรือไม่
 local function isPlayerNearbyPos(targetPos, range)
     range = range or PLAYER_SAFE_DISTANCE
     for _, player in ipairs(Players:GetPlayers()) do
@@ -55,21 +55,8 @@ local function isPlayerNearbyPos(targetPos, range)
     return false
 end
 
--- ฟังก์ชันเช็กว่ารอบตัวเรามี Player คนอื่นอยู่ใกล้ไหม (ถ้ามี ให้รอจนกว่าจะไป)
-local function waitUntilAreaClear()
-    local _, rootPart = getVehicleModel()
-    if not rootPart then return end
-
-    while autoFarmActive and isPlayerNearbyPos(rootPart.Position, PLAYER_SAFE_DISTANCE) do
-        task.wait(1) -- รอตราบใดที่มี Player อยู่ใกล้เราในระยะ 150 Studs
-    end
-end
-
--- Safe Teleport (พร้อมระบบรอพื้นที่เคลียร์)
+-- Safe Teleport
 local function safeTeleport(targetPos)
-    -- เช็กว่ารอบตัวเราไม่มีใครอยู่ใกล้ก่อนวาร์ป
-    waitUntilAreaClear()
-    
     local vehicle, rootPart = getVehicleModel()
     if not rootPart then return false end
 
@@ -108,18 +95,6 @@ local function safeTeleport(targetPos)
     return true
 end
 
--- ฟังก์ชันเช็กว่า NPC ตัวนี้โดนรับไปแล้วหรือยัง
-local function isNPCTaken(npc)
-    if npc:FindFirstChild("Occupied") or npc:FindFirstChild("Car") or npc:FindFirstChild("InVehicle") then
-        return true
-    end
-    local hum = npc:FindFirstChildOfClass("Humanoid")
-    if hum and hum.SeatPart then
-        return true
-    end
-    return false
-end
-
 -- ตรวจจับสถานะเควส (เช็ก UI)
 local function checkQuestStatus()
     local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
@@ -139,7 +114,7 @@ local function checkQuestStatus()
                 if desc:IsA("TextLabel") and desc.Visible and desc.Text ~= "" then
                     local txt = desc.Text:lower()
                     
-                    if string.find(txt, "perfect delivery") or string.find(txt, "go to") or string.find(txt, "deliver to") then
+                    if string.find(txt, "perfect delivery") or string.find(txt, "go to") or string.find(txt, "deliver") then
                         status.hasPassengerOnBoard = true
                     end
 
@@ -207,7 +182,7 @@ task.spawn(function()
             local vehicle, rootPart = getVehicleModel()
             if rootPart then
                 
-                -- Step 1: วาร์ปไปรับ NPC (เช็กระยะ 150 Studs ป้องกันโดนแย่ง/เห็น)
+                -- Step 1: ค้นหาและวาร์ปไปรับ NPC
                 local passengerSeated = false
                 local npcsFolder = Workspace:FindFirstChild("npcs")
                 
@@ -217,19 +192,26 @@ task.spawn(function()
                         
                         local isCustomer = (npc.Name == "Customer" or string.find(string.lower(npc.Name), "customer"))
                         
-                        if isCustomer and not isNPCTaken(npc) then
+                        if isCustomer then
                             local npcPart = npc:IsA("BasePart") and npc or npc:FindFirstChildWhichIsA("BasePart", true)
                             
                             -- เช็กว่าไม่มี Player คนอื่นอยู่ในระยะ 150 Studs รอบตัว NPC
                             if npcPart and not isPlayerNearbyPos(npcPart.Position, 150) then
                                 
-                                -- วาร์ปไปหา NPC (จะรอจนกว่ารอบตัวเราจะเคลียร์ก่อนด้วย)
-                                safeTeleport(npcPart.Position)
+                                -- วาร์ปไปจอดข้างๆ NPC
+                                safeTeleport(npcPart.Position + Vector3.new(3, 0, 0))
                                 
-                                -- Step 2: รอผู้โดยสารขึ้นรถ (Timeout 15 วินาที)
+                                -- Step 2: จอดนิ่งๆ รอผู้โดยสารขึ้นรถ (Timeout 15 วินาที)
                                 local startTime = tick()
                                 while (tick() - startTime) < 15 and autoFarmActive do
                                     task.wait(0.5)
+                                    
+                                    -- ล็อกความเร็วรถให้หยุดนิ่งเพื่อความปลอดภัย
+                                    if rootPart then
+                                        rootPart.AssemblyLinearVelocity = Vector3.zero
+                                        rootPart.AssemblyAngularVelocity = Vector3.zero
+                                    end
+
                                     local qStatus = checkQuestStatus()
                                     if qStatus.hasPassengerOnBoard then
                                         passengerSeated = true
@@ -238,7 +220,7 @@ task.spawn(function()
                                 end
 
                                 if passengerSeated then
-                                    break
+                                    break -- ขึ้นรถสำเร็จ หลุดจากลูปหา NPC
                                 end
                             end
                         end
@@ -313,17 +295,17 @@ local ScreenGui = Instance.new("ScreenGui")
 local ToggleButton = Instance.new("TextButton")
 local UICorner = Instance.new("UICorner")
 
-ScreenGui.Name = "Stealth150PerfectTPGui"
+ScreenGui.Name = "FixPickup150TPGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
-ToggleButton.Name = "TPStealthBtn"
+ToggleButton.Name = "TPFix150Btn"
 ToggleButton.Parent = ScreenGui
 ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
 ToggleButton.Position = UDim2.new(0.02, 0, 0.45, 0)
 ToggleButton.Size = UDim2.new(0, 210, 0, 50)
 ToggleButton.Font = Enum.Font.SourceSansBold
-ToggleButton.Text = "STEALTH 150m TP: OFF"
+ToggleButton.Text = "STABLE 150m TP: OFF"
 ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 ToggleButton.TextSize = 14.00
 ToggleButton.Active = true
@@ -335,10 +317,10 @@ UICorner.Parent = ToggleButton
 ToggleButton.MouseButton1Click:Connect(function()
     autoFarmActive = not autoFarmActive
     if autoFarmActive then
-        ToggleButton.Text = "STEALTH 150m TP: ON"
+        ToggleButton.Text = "STABLE 150m TP: ON"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
     else
-        ToggleButton.Text = "STEALTH 150m TP: OFF"
+        ToggleButton.Text = "STABLE 150m TP: OFF"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
     end
 end)
