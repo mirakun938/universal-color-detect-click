@@ -35,12 +35,11 @@ local function getVehicleModel()
     return vehicle, rootPart
 end
 
--- ฟังก์ชัน Safe Teleport (แก้บัคชน & แก้ดาเมจรัวๆ)
+-- Safe Teleport
 local function safeTeleport(targetPos)
     local vehicle, rootPart = getVehicleModel()
     if not rootPart then return false end
 
-    -- 1. ปิด Collision ชั่วคราวไม่ให้ชนตึก/พื้นตอนวาร์ป
     local partsToDisable = {}
     if vehicle then
         for _, part in ipairs(vehicle:GetDescendants()) do
@@ -51,7 +50,6 @@ local function safeTeleport(targetPos)
         end
     end
 
-    -- 2. หยุดแรงเหวี่ยงเดิมของรถทั้งหมด (กันรถสะบัด)
     for _, part in ipairs(vehicle and vehicle:GetDescendants() or {rootPart}) do
         if part:IsA("BasePart") then
             part.AssemblyLinearVelocity = Vector3.zero
@@ -59,7 +57,6 @@ local function safeTeleport(targetPos)
         end
     end
 
-    -- 3. ย้ายตำแหน่งไปสูงกว่าเป้าหมายเล็กน้อย (+2.5 Studs กันจมพื้น)
     local safeCFrame = CFrame.new(targetPos + Vector3.new(0, 2.5, 0))
     if vehicle and vehicle.PrimaryPart then
         vehicle:SetPrimaryPartCFrame(safeCFrame)
@@ -69,7 +66,6 @@ local function safeTeleport(targetPos)
 
     task.wait(0.1)
 
-    -- 4. คืนค่า Collision ให้รถกลับมาปกติ
     for _, part in ipairs(partsToDisable) do
         if part and part.Parent then
             part.CanCollide = true
@@ -79,29 +75,41 @@ local function safeTeleport(targetPos)
     return true
 end
 
--- ฟังก์ชันตรวจจับเงื่อนไขทางลัด
-local function checkShortcutRequirement()
+-- ตรวจสอบเงื่อนไขเควสจาก Text Label บน UI
+local function checkQuestRequirements()
     local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    if not playerGui then return "none" end
+    local reqs = {
+        shortcut = "none",
+        needsTopSpeed = false
+    }
+
+    if not playerGui then return reqs end
 
     for _, gui in ipairs(playerGui:GetChildren()) do
         if gui:IsA("ScreenGui") and gui.Enabled then
             for _, desc in ipairs(gui:GetDescendants()) do
                 if desc:IsA("TextLabel") and desc.Visible and desc.Text ~= "" then
                     local txt = desc.Text:lower()
+                    
+                    -- เช็คเควส Top Speed
+                    if string.find(txt, "top speed") or string.find(txt, "maximum speed") or string.find(txt, "reach your taxi") then
+                        reqs.needsTopSpeed = true
+                    end
+                    
+                    -- เช็คเควส Shortcut
                     if string.find(txt, "don't take any shortcuts") or string.find(txt, "dont take") then
-                        return "no_shortcut"
+                        reqs.shortcut = "no_shortcut"
                     elseif string.find(txt, "take a shortcut") then
-                        return "use_shortcut"
+                        reqs.shortcut = "use_shortcut"
                     end
                 end
             end
         end
     end
-    return "none"
+    return reqs
 end
 
--- ฟังก์ชันค้นหาจุดส่ง
+-- ค้นหาจุดหมายปลายทาง
 local function getTargetLocation()
     local locationsFolder = Workspace:FindFirstChild("locations")
     if not locationsFolder then return nil end
@@ -142,9 +150,9 @@ task.spawn(function()
     while true do
         task.wait(0.5)
         if autoFarmActive then
-            local _, rootPart = getVehicleModel()
+            local vehicle, rootPart = getVehicleModel()
             if rootPart then
-                -- Step 1: วาร์ปไปรับ NPC
+                -- 1. วาร์ปไปรับ NPC
                 local npcsFolder = Workspace:FindFirstChild("npcs")
                 if npcsFolder then
                     for _, npc in ipairs(npcsFolder:GetChildren()) do
@@ -160,16 +168,33 @@ task.spawn(function()
                     end
                 end
 
-                -- Step 2: เช็คเงื่อนไขทางลัด
+                -- 2. เช็คเควส & ทำตามเงื่อนไข
                 if autoFarmActive then
-                    local req = checkShortcutRequirement()
-                    if req == "use_shortcut" then
+                    local reqs = checkQuestRequirements()
+                    
+                    -- ทำเควส Top Speed ด้วยการวาร์ปขึ้นฟ้าแล้วดิ่งลงมา
+                    if reqs.needsTopSpeed then
+                        local currentPos = rootPart.Position
+                        safeTeleport(currentPos + Vector3.new(0, 800, 0))
+                        
+                        -- เร่งความเร็วตกตามธรรมชาติ
+                        task.wait(0.2)
+                        for _, part in ipairs(vehicle and vehicle:GetDescendants() or {rootPart}) do
+                            if part:IsA("BasePart") then
+                                part.AssemblyLinearVelocity = Vector3.new(0, -350, 0)
+                            end
+                        end
+                        task.wait(0.8)
+                    end
+
+                    -- ทำเควส Shortcut
+                    if reqs.shortcut == "use_shortcut" then
                         safeTeleport(SHORTCUT_POS)
-                        task.wait(0.6)
+                        task.wait(0.5)
                     end
                 end
 
-                -- Step 3: วาร์ปไปจุดส่งปลายทาง
+                -- 3. วาร์ปไปจุดส่งงาน
                 if autoFarmActive then
                     local targetObj = getTargetLocation()
                     if targetObj then
@@ -201,17 +226,17 @@ local ScreenGui = Instance.new("ScreenGui")
 local ToggleButton = Instance.new("TextButton")
 local UICorner = Instance.new("UICorner")
 
-ScreenGui.Name = "SafeSmartTPGui"
+ScreenGui.Name = "AutoPerfectFarmGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
-ToggleButton.Name = "TPSafeBtn"
+ToggleButton.Name = "TPPerfectBtn"
 ToggleButton.Parent = ScreenGui
 ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
 ToggleButton.Position = UDim2.new(0.02, 0, 0.45, 0)
 ToggleButton.Size = UDim2.new(0, 200, 0, 50)
 ToggleButton.Font = Enum.Font.SourceSansBold
-ToggleButton.Text = "SAFE PERFECT TP: OFF"
+ToggleButton.Text = "AUTO PERFECT TP: OFF"
 ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 ToggleButton.TextSize = 14.00
 ToggleButton.Active = true
@@ -223,10 +248,10 @@ UICorner.Parent = ToggleButton
 ToggleButton.MouseButton1Click:Connect(function()
     autoFarmActive = not autoFarmActive
     if autoFarmActive then
-        ToggleButton.Text = "SAFE PERFECT TP: ON"
+        ToggleButton.Text = "AUTO PERFECT TP: ON"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
     else
-        ToggleButton.Text = "SAFE PERFECT TP: OFF"
+        ToggleButton.Text = "AUTO PERFECT TP: OFF"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
     end
 end)
