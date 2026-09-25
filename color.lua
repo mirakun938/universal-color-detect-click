@@ -6,8 +6,10 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 local autoFarmActive = false
 
--- ระยะตรวจจับ NPC (150 Studs)
-local NPC_SAFE_DISTANCE = 150
+-- ==================== [ตั้งค่าระยะทาง] ====================
+local PLAYER_SAFE_DISTANCE = 300 -- ระยะตรวจจับ Player คนอื่นรอบตัวเรา (300 Studs)
+local NPC_SAFE_DISTANCE = 150    -- ระยะตรวจจับ NPC/Player รอบ NPC (150 Studs)
+-- =======================================================
 
 -- พิกัดจุดทางลัด
 local SHORTCUT_POS = Vector3.new(-135.0, 5.7, 3447.1)
@@ -38,31 +40,15 @@ local function getVehicleModel()
     return vehicle, rootPart
 end
 
--- 1. เช็กว่ามี Player อื่นหันกล้อง/หน้ามาทางเราหรือไม่ (SCP-173 Style)
-local function isAnyPlayerLookingAtUs()
-    local _, myRoot = getVehicleModel()
-    if not myRoot then return false end
-
+-- เช็กว่ามี Player คนอื่นอยู่ใกล้ตำแหน่งที่กำหนดหรือไม่
+local function isPlayerNearby(targetPos, range)
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             local pRoot = player.Character:FindFirstChild("HumanoidRootPart") or player.Character:FindFirstChildWhichIsA("BasePart")
             if pRoot then
-                local dist = (pRoot.Position - myRoot.Position).Magnitude
-                if dist <= 300 then
-                    local lookVector = pRoot.CFrame.LookVector
-                    local dirToUs = (myRoot.Position - pRoot.Position).Unit
-                    local dot = lookVector:Dot(dirToUs)
-                    
-                    if dot > 0.3 then
-                        local rayParams = RaycastParams.new()
-                        rayParams.FilterType = RaycastFilterType.Exclude
-                        rayParams.FilterDescendantsInstances = {player.Character, myRoot.Parent}
-                        
-                        local rayResult = Workspace:Raycast(pRoot.Position, (myRoot.Position - pRoot.Position), rayParams)
-                        if not rayResult then
-                            return true -- มีคนมองเห็นเราอยู่!
-                        end
-                    end
+                local dist = (pRoot.Position - targetPos).Magnitude
+                if dist <= range then
+                    return true -- มี Player คนอื่นอยู่ในระยะ
                 end
             end
         end
@@ -70,31 +56,21 @@ local function isAnyPlayerLookingAtUs()
     return false
 end
 
--- 2. เช็กระยะ NPC 150 Studs
-local function isPlayerNearNPC(npcPos)
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            local pRoot = player.Character:FindFirstChild("HumanoidRootPart") or player.Character:FindFirstChildWhichIsA("BasePart")
-            if pRoot then
-                if (pRoot.Position - npcPos).Magnitude <= NPC_SAFE_DISTANCE then
-                    return true
-                end
-            end
+-- รอตราบใดที่มี Player คนอื่นอยู่ในระยะ 300 Studs รอบตัวรถเรา
+local function waitUntilAreaClear()
+    while autoFarmActive do
+        local _, rootPart = getVehicleModel()
+        if rootPart and isPlayerNearby(rootPart.Position, PLAYER_SAFE_DISTANCE) then
+            task.wait(0.5)
+        else
+            break
         end
-    end
-    return false
-end
-
--- รอจนกว่าจะไม่มีใครมอง
-local function waitUntilUnseen()
-    while autoFarmActive and isAnyPlayerLookingAtUs() do
-        task.wait(0.5)
     end
 end
 
 -- Safe Teleport
 local function safeTeleport(targetPos)
-    waitUntilUnseen()
+    waitUntilAreaClear() -- เช็กระยะ 300 Studs รอบตัวเราก่อนวาร์ป
     
     local vehicle, rootPart = getVehicleModel()
     if not rootPart then return false end
@@ -228,7 +204,8 @@ local function tryPickupPassenger()
         if isCustomer then
             local npcPart = npc:IsA("BasePart") and npc or npc:FindFirstChildWhichIsA("BasePart", true)
             
-            if npcPart and not isPlayerNearNPC(npcPart.Position) then
+            -- เช็กระยะ NPC 150 Studs
+            if npcPart and not isPlayerNearby(npcPart.Position, NPC_SAFE_DISTANCE) then
                 safeTeleport(npcPart.Position + Vector3.new(3, 0, 0))
                 
                 local startTime = tick()
@@ -326,47 +303,57 @@ task.spawn(function()
     end
 end)
 
--- ==================== [ส่วนการสร้าง UI แบบ การันตีติด 100%] ====================
-local guiName = "SCP173AutoFarmGui_Fixed"
+-- ==================== [ส่วนการสร้าง UI บน PlayerGui ป้องกันปุ่มหาย] ====================
+local guiName = "CustomDistAutoFarmGui"
 
--- ลบ UI เก่าทิ้งถ้ามีค้างอยู่
-local targetContainer = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
-if targetContainer:FindFirstChild(guiName) then
-    targetContainer[guiName]:Destroy()
+local function createUI(parent)
+    if parent:FindFirstChild(guiName) then
+        parent[guiName]:Destroy()
+    end
+
+    local ScreenGui = Instance.new("ScreenGui")
+    local ToggleButton = Instance.new("TextButton")
+    local UICorner = Instance.new("UICorner")
+
+    ScreenGui.Name = guiName
+    ScreenGui.ResetOnSpawn = false
+    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    ScreenGui.Parent = parent
+
+    ToggleButton.Name = "TPMainBtn"
+    ToggleButton.Parent = ScreenGui
+    ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    ToggleButton.Position = UDim2.new(0.05, 0, 0.35, 0)
+    ToggleButton.Size = UDim2.new(0, 230, 0, 55)
+    ToggleButton.Font = Enum.Font.SourceSansBold
+    ToggleButton.Text = "AUTO FARM (P:300m/NPC:150m): OFF"
+    ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    ToggleButton.TextSize = 14.00
+    ToggleButton.Active = true
+    ToggleButton.Draggable = true
+
+    UICorner.CornerRadius = UDim.new(0, 10)
+    UICorner.Parent = ToggleButton
+
+    ToggleButton.MouseButton1Click:Connect(function()
+        autoFarmActive = not autoFarmActive
+        if autoFarmActive then
+            ToggleButton.Text = "AUTO FARM (P:300m/NPC:150m): ON"
+            ToggleButton.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
+        else
+            ToggleButton.Text = "AUTO FARM (P:300m/NPC:150m): OFF"
+            ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+        end
+    end)
 end
 
-local ScreenGui = Instance.new("ScreenGui")
-local ToggleButton = Instance.new("TextButton")
-local UICorner = Instance.new("UICorner")
-
-ScreenGui.Name = guiName
-ScreenGui.ResetOnSpawn = false
-ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-ScreenGui.Parent = targetContainer
-
-ToggleButton.Name = "TPMainBtn"
-ToggleButton.Parent = ScreenGui
-ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-ToggleButton.Position = UDim2.new(0.05, 0, 0.4, 0) -- ปรับตำแหน่งให้อยู่ฝั่งซ้ายของจอชัดเจน
-ToggleButton.Size = UDim2.new(0, 220, 0, 55)
-ToggleButton.Font = Enum.Font.SourceSansBold
-ToggleButton.Text = "AUTO FARM (SCP-173): OFF"
-ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-ToggleButton.TextSize = 16.00
-ToggleButton.Active = true
-ToggleButton.Draggable = true
-
-UICorner.CornerRadius = UDim.new(0, 10)
-UICorner.Parent = ToggleButton
-
-ToggleButton.MouseButton1Click:Connect(function()
-    autoFarmActive = not autoFarmActive
-    if autoFarmActive then
-        ToggleButton.Text = "AUTO FARM (SCP-173): ON"
-        ToggleButton.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
-    else
-        ToggleButton.Text = "AUTO FARM (SCP-173): OFF"
-        ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+-- สร้าง UI ลงทั้ง PlayerGui และ CoreGui
+if LocalPlayer:FindFirstChild("PlayerGui") then
+    createUI(LocalPlayer.PlayerGui)
+end
+if gethui then
+    createUI(gethui())
+elseif CoreGui then
+    createUI(CoreGui)
     end
-end)
     
