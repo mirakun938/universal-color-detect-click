@@ -6,11 +6,11 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 local autoFarmActive = false
 
--- กำหนดระยะตรวจจับ NPC (150 Studs)
+-- ค่ากำหนดระยะ
 local NPC_SAFE_DISTANCE = 150
-
--- พิกัดจุดทางลัด
 local SHORTCUT_POS = Vector3.new(-135.0, 5.7, 3447.1)
+
+print("[Taxi Script] Loading Script...")
 
 -- ค้นหาตัวรถ
 local function getVehicleModel()
@@ -38,7 +38,7 @@ local function getVehicleModel()
     return vehicle, rootPart
 end
 
--- 1. ฟังก์ชันเช็กว่ากล้องของผู้เล่นอื่นมองมาทางรถเราอยู่หรือไม่ (SCP-173 Style)
+-- 1. เช็กสายตา Player อื่น (SCP-173 Style)
 local function isAnyPlayerLookingAtUs()
     local _, myRoot = getVehicleModel()
     if not myRoot then return false end
@@ -47,24 +47,18 @@ local function isAnyPlayerLookingAtUs()
         if player ~= LocalPlayer and player.Character then
             local pRoot = player.Character:FindFirstChild("HumanoidRootPart") or player.Character:FindFirstChildWhichIsA("BasePart")
             if pRoot then
-                -- เช็กระยะทางเบื้องต้น (ถ้าระยะไกลเกิน 300 Studs กล้องจะมองไม่เห็นตัวรถชัด)
                 local dist = (pRoot.Position - myRoot.Position).Magnitude
                 if dist <= 300 then
-                    -- คำนวณทิศทางที่ Player หันหน้าไป
                     local lookVector = pRoot.CFrame.LookVector
                     local dirToUs = (myRoot.Position - pRoot.Position).Unit
-                    
-                    -- Dot Product: ถ้าค่า > 0.3 แสดงว่ามุมมองหันมาทางเรา (FOV ~ 140 องศา)
                     local dot = lookVector:Dot(dirToUs)
+                    
                     if dot > 0.3 then
-                        -- ใช้ Raycast เช็กว่ามีตึก/กำแพง บังอยู่หรือไม่
                         local rayParams = RaycastParams.new()
                         rayParams.FilterType = RaycastFilterType.Exclude
                         rayParams.FilterDescendantsInstances = {player.Character, myRoot.Parent}
                         
                         local rayResult = Workspace:Raycast(pRoot.Position, (myRoot.Position - pRoot.Position), rayParams)
-                        
-                        -- ถ้าไม่มีอะไรบัง Raycast แสดงว่าผู้เล่นคนนั้นมองเห็นเราตรงๆ!
                         if not rayResult then
                             return true 
                         end
@@ -76,7 +70,7 @@ local function isAnyPlayerLookingAtUs()
     return false
 end
 
--- 2. ฟังก์ชันเช็กระยะ NPC (ใช้ระยะ 150 Studs เดิม)
+-- 2. เช็กระยะ NPC
 local function isPlayerNearNPC(npcPos)
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -91,17 +85,16 @@ local function isPlayerNearNPC(npcPos)
     return false
 end
 
--- รอจนกว่าจะไม่มีใครมองมาทางเรา (SCP-173 Mechanism)
+-- รอจนกว่าจะไม่มีใครมอง
 local function waitUntilUnseen()
     while autoFarmActive and isAnyPlayerLookingAtUs() do
         task.wait(0.5)
     end
 end
 
--- Safe Teleport (เช็กการมองเห็นก่อนวาร์ป)
+-- Teleport
 local function safeTeleport(targetPos)
-    waitUntilUnseen() -- รอจนกว่าจะไม่มีใครมอง
-    
+    waitUntilUnseen()
     local vehicle, rootPart = getVehicleModel()
     if not rootPart then return false end
 
@@ -136,11 +129,10 @@ local function safeTeleport(targetPos)
             part.CanCollide = true
         end
     end
-
     return true
 end
 
--- ตรวจจับสถานะเควส (เช็ก UI)
+-- ตรวจจับสถานะเควส
 local function checkQuestStatus()
     local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
     local status = {
@@ -185,7 +177,7 @@ end
 
 -- ค้นหาจุดหมายปลายทาง
 local function getTargetLocation()
-    local locationsFolder = Workspace:FindFirstChild("locations")
+    local locationsFolder = Workspace:FindFirstChild("locations") or Workspace:FindFirstChild("Locations")
     if not locationsFolder then return nil end
 
     local targetName = nil
@@ -219,12 +211,12 @@ local function getTargetLocation()
     return locationsFolder:GetChildren()[1]
 end
 
--- 3. ฟังก์ชันค้นหาและรับผู้โดยสาร (ใช้ร่วมกันทั้งตอนเริ่มต้นและหลังส่งงานเสร็จ)
+-- ค้นหาและรับ NPC
 local function tryPickupPassenger()
     local vehicle, rootPart = getVehicleModel()
     if not rootPart then return false end
 
-    local npcsFolder = Workspace:FindFirstChild("npcs")
+    local npcsFolder = Workspace:FindFirstChild("npcs") or Workspace:FindFirstChild("NPCs") or Workspace:FindFirstChild("Customers")
     if not npcsFolder then return false end
 
     for _, npc in ipairs(npcsFolder:GetChildren()) do
@@ -234,13 +226,9 @@ local function tryPickupPassenger()
         if isCustomer then
             local npcPart = npc:IsA("BasePart") and npc or npc:FindFirstChildWhichIsA("BasePart", true)
             
-            -- เช็กว่าไม่มี Player คนอื่นอยู่ในระยะ 150 Studs รอบตัว NPC
             if npcPart and not isPlayerNearNPC(npcPart.Position) then
-                
-                -- วาร์ปไปจอดข้าง NPC
                 safeTeleport(npcPart.Position + Vector3.new(3, 0, 0))
                 
-                -- จอดนิ่งรอผู้โดยสารขึ้นรถ (Timeout 15 วินาที)
                 local startTime = tick()
                 while (tick() - startTime) < 15 and autoFarmActive do
                     task.wait(0.5)
@@ -251,7 +239,7 @@ local function tryPickupPassenger()
 
                     local qStatus = checkQuestStatus()
                     if qStatus.hasPassengerOnBoard then
-                        return true -- รับผู้โดยสารสำเร็จ!
+                        return true
                     end
                 end
             end
@@ -266,18 +254,16 @@ task.spawn(function()
         task.wait(0.5)
         if autoFarmActive do
             local vehicle, rootPart = getVehicleModel()
-            if rootPart then
-                
-                -- เช็กก่อนว่ามีผู้โดยสารบนรถอยู่แล้วหรือไม่ (กรณีรับจากจุดส่งงานเดิม)
+            if not rootPart then
+                warn("[Taxi Script] Warning: Player is not in a vehicle seat!")
+            else
                 local qStatus = checkQuestStatus()
                 local passengerSeated = qStatus.hasPassengerOnBoard
 
-                -- ถ้ารถยังว่างอยู่ ให้ไปรับผู้โดยสาร
                 if not passengerSeated then
                     passengerSeated = tryPickupPassenger()
                 end
 
-                -- ถ้ามีผู้โดยสารขึ้นรถแล้ว ให้เริ่มทำเควสและส่งงาน
                 if autoFarmActive and passengerSeated then
                     local attempts = 0
                     while autoFarmActive and attempts < 12 do
@@ -290,7 +276,6 @@ task.spawn(function()
                             break
                         end
 
-                        -- ทำเควส Top Speed
                         if qStatus.hasTopSpeedQuest and not qStatus.isTopSpeedDone then
                             local currentPos = rootPart.Position
                             safeTeleport(currentPos + Vector3.new(0, 850, 0))
@@ -303,7 +288,6 @@ task.spawn(function()
                             task.wait(0.8)
                         end
 
-                        -- ทำเควส Shortcut
                         if qStatus.hasShortcutQuest and not qStatus.isShortcutDone then
                             safeTeleport(SHORTCUT_POS)
                             task.wait(0.5)
@@ -313,7 +297,6 @@ task.spawn(function()
                         task.wait(0.3)
                     end
 
-                    -- วาร์ปไปส่งงานปลายทาง
                     local targetObj = getTargetLocation()
                     if targetObj then
                         local targetPart = targetObj:IsA("BasePart") and targetObj or targetObj:FindFirstChildWhichIsA("BasePart", true)
@@ -321,7 +304,6 @@ task.spawn(function()
                             safeTeleport(targetPart.Position)
                             task.wait(0.5)
 
-                            -- ยิง Remote จบงาน
                             local remotes = {"deliveryfinserv", "deliveryfin", "delinterrupt"}
                             for _, remoteName in ipairs(remotes) do
                                 local remote = ReplicatedStorage:FindFirstChild(remoteName, true) or Workspace:FindFirstChild(remoteName, true)
@@ -332,37 +314,40 @@ task.spawn(function()
                             end
                             
                             task.wait(0.5)
-                            
-                            -- หลังส่งผู้โดยสารเสร็จ ตรวจหาผู้โดยสารใกล้ๆ จุดส่งเพื่อรับต่อเนื่องทันที!
                             tryPickupPassenger()
                         end
                     end
                 end
-
-                task.wait(1.0)
             end
         end
     end
 end)
 
--- UI Toggle Button
+-- UI Creation (ปรับปรุงให้รองรับทุก Executor)
+local parentGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+if gethui then
+    parentGui = gethui()
+elseif CoreGui then
+    parentGui = CoreGui
+end
+
 local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "TaxiAutoFarmDebugGui"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = parentGui
+
 local ToggleButton = Instance.new("TextButton")
 local UICorner = Instance.new("UICorner")
 
-ScreenGui.Name = "SCP173ChainedTPGui"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
-
-ToggleButton.Name = "TPSCPBtn"
+ToggleButton.Name = "TaxiBtn"
 ToggleButton.Parent = ScreenGui
 ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-ToggleButton.Position = UDim2.new(0.02, 0, 0.45, 0)
-ToggleButton.Size = UDim2.new(0, 210, 0, 50)
+ToggleButton.Position = UDim2.new(0.02, 0, 0.4, 0)
+ToggleButton.Size = UDim2.new(0, 200, 0, 50)
 ToggleButton.Font = Enum.Font.SourceSansBold
-ToggleButton.Text = "SCP-173 CHAIN TP: OFF"
+ToggleButton.Text = "AUTO FARM: OFF"
 ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-ToggleButton.TextSize = 14.00
+ToggleButton.TextSize = 16.00
 ToggleButton.Active = true
 ToggleButton.Draggable = true
 
@@ -372,11 +357,15 @@ UICorner.Parent = ToggleButton
 ToggleButton.MouseButton1Click:Connect(function()
     autoFarmActive = not autoFarmActive
     if autoFarmActive then
-        ToggleButton.Text = "SCP-173 CHAIN TP: ON"
+        ToggleButton.Text = "AUTO FARM: ON"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
+        print("[Taxi Script] Auto Farm Started")
     else
-        ToggleButton.Text = "SCP-173 CHAIN TP: OFF"
+        ToggleButton.Text = "AUTO FARM: OFF"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+        print("[Taxi Script] Auto Farm Stopped")
     end
 end)
+
+print("[Taxi Script] Script Loaded Successfully!")
     
