@@ -1,41 +1,20 @@
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
-local StarterGui = game:GetService("StarterGui")
+local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
 local autoFarmActive = false
 
-local PLAYER_SAFE_DISTANCE = 300
-local NPC_SAFE_DISTANCE = 150
+-- ==================== [ตั้งค่าระยะทาง] ====================
+local PLAYER_SAFE_DISTANCE = 300 -- ระยะตรวจจับ Player คนอื่นรอบตัวเรา (300 Studs)
+local NPC_SAFE_DISTANCE = 150    -- ระยะตรวจจับ NPC/Player รอบ NPC (150 Studs)
+-- =======================================================
+
+-- พิกัดจุดทางลัด
 local SHORTCUT_POS = Vector3.new(-135.0, 5.7, 3447.1)
 
-local function sendNotification(title, text)
-    pcall(function()
-        StarterGui:SetCore("SendNotification", {
-            Title = title,
-            Text = text,
-            Duration = 3
-        })
-    end)
-end
-
--- กดปุ่ม F เพื่อเปิด-ปิด Auto Farm
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    if input.KeyCode == Enum.KeyCode.F then
-        autoFarmActive = not autoFarmActive
-        if autoFarmActive then
-            sendNotification("AUTO FARM", "สถานะ: ON (เปิดใช้งาน)")
-        else
-            sendNotification("AUTO FARM", "สถานะ: OFF (ปิดใช้งาน)")
-        end
-    end
-end)
-
-sendNotification("AUTO FARM LOADED", "กดปุ่ม 'F' บนคีย์บอร์ดเพื่อเปิด/ปิด")
-
+-- ค้นหาตัวรถ
 local function getVehicleModel()
     local char = LocalPlayer.Character
     if not char then return nil, nil end
@@ -61,13 +40,15 @@ local function getVehicleModel()
     return vehicle, rootPart
 end
 
+-- เช็กว่ามี Player คนอื่นอยู่ใกล้ตำแหน่งที่กำหนดหรือไม่
 local function isPlayerNearby(targetPos, range)
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             local pRoot = player.Character:FindFirstChild("HumanoidRootPart") or player.Character:FindFirstChildWhichIsA("BasePart")
             if pRoot then
-                if (pRoot.Position - targetPos).Magnitude <= range then
-                    return true
+                local dist = (pRoot.Position - targetPos).Magnitude
+                if dist <= range then
+                    return true -- มี Player คนอื่นอยู่ในระยะ
                 end
             end
         end
@@ -75,6 +56,7 @@ local function isPlayerNearby(targetPos, range)
     return false
 end
 
+-- รอตราบใดที่มี Player คนอื่นอยู่ในระยะ 300 Studs รอบตัวรถเรา
 local function waitUntilAreaClear()
     while autoFarmActive do
         local _, rootPart = getVehicleModel()
@@ -86,8 +68,9 @@ local function waitUntilAreaClear()
     end
 end
 
+-- Safe Teleport
 local function safeTeleport(targetPos)
-    waitUntilAreaClear()
+    waitUntilAreaClear() -- เช็กระยะ 300 Studs รอบตัวเราก่อนวาร์ป
     
     local vehicle, rootPart = getVehicleModel()
     if not rootPart then return false end
@@ -127,6 +110,7 @@ local function safeTeleport(targetPos)
     return true
 end
 
+-- ตรวจจับสถานะเควส
 local function checkQuestStatus()
     local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
     local status = {
@@ -169,6 +153,7 @@ local function checkQuestStatus()
     return status
 end
 
+-- ค้นหาจุดหมาย
 local function getTargetLocation()
     local locationsFolder = Workspace:FindFirstChild("locations")
     if not locationsFolder then return nil end
@@ -204,6 +189,7 @@ local function getTargetLocation()
     return locationsFolder:GetChildren()[1]
 end
 
+-- รับผู้โดยสาร
 local function tryPickupPassenger()
     local vehicle, rootPart = getVehicleModel()
     if not rootPart then return false end
@@ -218,6 +204,7 @@ local function tryPickupPassenger()
         if isCustomer then
             local npcPart = npc:IsA("BasePart") and npc or npc:FindFirstChildWhichIsA("BasePart", true)
             
+            -- เช็กระยะ NPC 150 Studs
             if npcPart and not isPlayerNearby(npcPart.Position, NPC_SAFE_DISTANCE) then
                 safeTeleport(npcPart.Position + Vector3.new(3, 0, 0))
                 
@@ -279,7 +266,7 @@ task.spawn(function()
                             task.wait(0.8)
                         end
 
-                        if qStatus.hasShortcutQuest and not qStatus.isShortcutDone me
+                        if qStatus.hasShortcutQuest and not qStatus.isShortcutDone then
                             safeTeleport(SHORTCUT_POS)
                             task.wait(0.5)
                         end
@@ -315,4 +302,60 @@ task.spawn(function()
         end
     end
 end)
+
+-- ==================== [ส่วนการสร้าง UI แบบเซฟที่สุด] ====================
+local guiName = "FixedDistAutoFarmGui"
+
+local function createUI(parent)
+    if not parent then return end
+    if parent:FindFirstChild(guiName) then
+        parent[guiName]:Destroy()
+    end
+
+    local ScreenGui = Instance.new("ScreenGui")
+    local ToggleButton = Instance.new("TextButton")
+    local UICorner = Instance.new("UICorner")
+
+    ScreenGui.Name = guiName
+    ScreenGui.ResetOnSpawn = false
+    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    ScreenGui.Parent = parent
+
+    ToggleButton.Name = "TPMainBtn"
+    ToggleButton.Parent = ScreenGui
+    ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    ToggleButton.Position = UDim2.new(0.05, 0, 0.35, 0)
+    ToggleButton.Size = UDim2.new(0, 220, 0, 55)
+    ToggleButton.Font = Enum.Font.SourceSansBold
+    ToggleButton.Text = "AUTO FARM (P:300m/NPC:150m): OFF"
+    ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    ToggleButton.TextSize = 14.00
+    ToggleButton.Active = true
+    ToggleButton.Draggable = true
+
+    UICorner.CornerRadius = UDim.new(0, 10)
+    UICorner.Parent = ToggleButton
+
+    ToggleButton.MouseButton1Click:Connect(function()
+        autoFarmActive = not autoFarmActive
+        if autoFarmActive then
+            ToggleButton.Text = "AUTO FARM (P:300m/NPC:150m): ON"
+            ToggleButton.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
+        else
+            ToggleButton.Text = "AUTO FARM (P:300m/NPC:150m): OFF"
+            ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+        end
+    end)
+end
+
+-- สร้าง UI รองรับหลายสภาพแวดล้อม
+if gethui then
+    createUI(gethui())
+elseif CoreGui then
+    createUI(CoreGui)
+end
+
+if LocalPlayer:FindFirstChild("PlayerGui") then
+    createUI(LocalPlayer.PlayerGui)
+    end
     
