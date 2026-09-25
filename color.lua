@@ -7,8 +7,8 @@ local LocalPlayer = Players.LocalPlayer
 local autoFarmActive = false
 
 -- กำหนดระยะตรวจจับ
-local PLAYER_SAFE_DISTANCE = 300 -- ระยะปลอดภัยจาก Player คนอื่นรอบตัวเรา (300 Studs)
-local NPC_SAFE_DISTANCE = 150    -- ระยะตรวจจับ Player รอบ NPC (150 Studs)
+local PLAYER_SAFE_DISTANCE = 300 -- ระยะปลอดภัยรอบตัวเรา (300 Studs)
+local NPC_SAFE_DISTANCE = 150    -- ระยะตรวจจับรอบ NPC (150 Studs)
 
 -- พิกัดจุดทางลัด
 local SHORTCUT_POS = Vector3.new(-135.0, 5.7, 3447.1)
@@ -39,7 +39,7 @@ local function getVehicleModel()
     return vehicle, rootPart
 end
 
--- ฟังก์ชันเช็กว่ามี Player คนอื่น (ที่ไม่ใช่เรา) อยู่ใกล้ตำแหน่งที่กำหนดหรือไม่
+-- ฟังก์ชันเช็กว่ามี Player คนอื่นอยู่ใกล้ตำแหน่งที่กำหนดหรือไม่
 local function isPlayerNearbyPos(targetPos, range)
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -55,17 +55,10 @@ local function isPlayerNearbyPos(targetPos, range)
     return false
 end
 
--- Safe Teleport (เพิ่มการเช็กระยะ Player 300 Studs ก่อนวาร์ป)
+-- Safe Teleport (แบบไม่ติดลูปค้าง)
 local function safeTeleport(targetPos)
     local vehicle, rootPart = getVehicleModel()
     if not rootPart then return false end
-
-    -- เช็กว่ามี Player คนอื่นอยู่ใกล้ตัวรถเราในระยะ 300 Studs หรือไม่ ถ้ารถอยู่ใกล้คนอื่นให้รอก่อน
-    while autoFarmActive and isPlayerNearbyPos(rootPart.Position, PLAYER_SAFE_DISTANCE) do
-        task.wait(0.5)
-        vehicle, rootPart = getVehicleModel()
-        if not rootPart then return false end
-    end
 
     local partsToDisable = {}
     if vehicle then
@@ -189,115 +182,119 @@ task.spawn(function()
             local vehicle, rootPart = getVehicleModel()
             if rootPart then
                 
-                -- Step 1: ค้นหาและวาร์ปไปรับ NPC
-                local passengerSeated = false
-                local npcsFolder = Workspace:FindFirstChild("npcs")
-                
-                if npcsFolder then
-                    for _, npc in ipairs(npcsFolder:GetChildren()) do
-                        if not autoFarmActive then break end
-                        
-                        local isCustomer = (npc.Name == "Customer" or string.find(string.lower(npc.Name), "customer"))
-                        
-                        if isCustomer then
-                            local npcPart = npc:IsA("BasePart") and npc or npc:FindFirstChildWhichIsA("BasePart", true)
+                -- เช็กก่อนว่ามี Player อื่นในระยะ 300 Studs รอบตัวเราหรือไม่ ถ้ามีข้ามลูปนี้ไปก่อน (ไม่วาร์ป)
+                if not isPlayerNearbyPos(rootPart.Position, PLAYER_SAFE_DISTANCE) then
+                    
+                    -- Step 1: ค้นหาและวาร์ปไปรับ NPC
+                    local passengerSeated = false
+                    local npcsFolder = Workspace:FindFirstChild("npcs")
+                    
+                    if npcsFolder then
+                        for _, npc in ipairs(npcsFolder:GetChildren()) do
+                            if not autoFarmActive then break end
                             
-                            -- เช็กว่าไม่มี Player คนอื่นอยู่ในระยะ 150 Studs รอบตัว NPC
-                            if npcPart and not isPlayerNearbyPos(npcPart.Position, NPC_SAFE_DISTANCE) then
+                            local isCustomer = (npc.Name == "Customer" or string.find(string.lower(npc.Name), "customer"))
+                            
+                            if isCustomer then
+                                local npcPart = npc:IsA("BasePart") and npc or npc:FindFirstChildWhichIsA("BasePart", true)
                                 
-                                -- วาร์ปไปจอดข้างๆ NPC
-                                safeTeleport(npcPart.Position + Vector3.new(3, 0, 0))
-                                
-                                -- Step 2: จอดนิ่งๆ รอผู้โดยสารขึ้นรถ (Timeout 15 วินาที)
-                                local startTime = tick()
-                                while (tick() - startTime) < 15 and autoFarmActive do
-                                    task.wait(0.5)
+                                -- เช็กระยะ NPC 150 Studs
+                                if npcPart and not isPlayerNearbyPos(npcPart.Position, NPC_SAFE_DISTANCE) then
                                     
-                                    -- ล็อกความเร็วรถให้หยุดนิ่งเพื่อความปลอดภัย
-                                    if rootPart then
-                                        rootPart.AssemblyLinearVelocity = Vector3.zero
-                                        rootPart.AssemblyAngularVelocity = Vector3.zero
+                                    safeTeleport(npcPart.Position + Vector3.new(3, 0, 0))
+                                    
+                                    -- Step 2: จอดนิ่งๆ รอผู้โดยสารขึ้นรถ
+                                    local startTime = tick()
+                                    while (tick() - startTime) < 15 and autoFarmActive do
+                                        task.wait(0.5)
+                                        
+                                        if rootPart then
+                                            rootPart.AssemblyLinearVelocity = Vector3.zero
+                                            rootPart.AssemblyAngularVelocity = Vector3.zero
+                                        end
+
+                                        local qStatus = checkQuestStatus()
+                                        if qStatus.hasPassengerOnBoard then
+                                            passengerSeated = true
+                                            break
+                                        end
                                     end
 
-                                    local qStatus = checkQuestStatus()
-                                    if qStatus.hasPassengerOnBoard then
-                                        passengerSeated = true
+                                    if passengerSeated then
                                         break
                                     end
                                 end
+                            end
+                        end
+                    end
 
-                                if passengerSeated then
-                                    break -- ขึ้นรถสำเร็จ หลุดจากลูปหา NPC
+                    -- Step 3: ทำเควส
+                    if autoFarmActive and passengerSeated then
+                        local attempts = 0
+                        while autoFarmActive and attempts < 12 do
+                            local qStatus = checkQuestStatus()
+                            
+                            local topSpeedReady = not qStatus.hasTopSpeedQuest or qStatus.isTopSpeedDone
+                            local shortcutReady = not qStatus.hasShortcutQuest or qStatus.isShortcutDone
+                            
+                            if topSpeedReady and shortcutReady then
+                                break
+                            end
+
+                            if qStatus.hasTopSpeedQuest and not qStatus.isTopSpeedDone then
+                                local currentPos = rootPart.Position
+                                safeTeleport(currentPos + Vector3.new(0, 850, 0))
+                                task.wait(0.2)
+                                for _, part in ipairs(vehicle and vehicle:GetDescendants() or {rootPart}) do
+                                    if part:IsA("BasePart") then
+                                        part.AssemblyLinearVelocity = Vector3.new(0, -400, 0)
+                                    end
+                                end
+                                task.wait(0.8)
+                            end
+
+                            if qStatus.hasShortcutQuest and not qStatus.isShortcutDone then
+                                safeTeleport(SHORTCUT_POS)
+                                task.wait(0.5)
+                            end
+
+                            attempts = attempts + 1
+                            task.wait(0.3)
+                        end
+
+                        -- Step 4: วาร์ปไปส่งงาน
+                        local targetObj = getTargetLocation()
+                        if targetObj then
+                            local targetPart = targetObj:IsA("BasePart") and targetObj or targetObj:FindFirstChildWhichIsA("BasePart", true)
+                            if targetPart then
+                                safeTeleport(targetPart.Position)
+                                task.wait(0.5)
+
+                                local remotes = {"deliveryfinserv", "deliveryfin", "delinterrupt"}
+                                for _, remoteName in ipairs(remotes) do
+                                    local remote = ReplicatedStorage:FindFirstChild(remoteName, true) or Workspace:FindFirstChild(remoteName, true)
+                                    if remote and remote:IsA("RemoteEvent") then
+                                        remote:FireServer(targetObj.Name)
+                                        remote:FireServer()
+                                    end
                                 end
                             end
                         end
                     end
-                end
 
-                -- Step 3: ทำเควสจนกว่าข้อความจะเปลี่ยนเป็นสีเขียว
-                if autoFarmActive and passengerSeated then
-                    local attempts = 0
-                    while autoFarmActive and attempts < 12 do
-                        local qStatus = checkQuestStatus()
-                        
-                        local topSpeedReady = not qStatus.hasTopSpeedQuest or qStatus.isTopSpeedDone
-                        local shortcutReady = not qStatus.hasShortcutQuest or qStatus.isShortcutDone
-                        
-                        if topSpeedReady and shortcutReady then
-                            break
-                        end
-
-                        -- ทำเควส Top Speed
-                        if qStatus.hasTopSpeedQuest and not qStatus.isTopSpeedDone then
-                            local currentPos = rootPart.Position
-                            safeTeleport(currentPos + Vector3.new(0, 850, 0))
-                            task.wait(0.2)
-                            for _, part in ipairs(vehicle and vehicle:GetDescendants() or {rootPart}) do
-                                if part:IsA("BasePart") then
-                                    part.AssemblyLinearVelocity = Vector3.new(0, -400, 0)
-                                end
-                            end
-                            task.wait(0.8)
-                        end
-
-                        -- ทำเควส Shortcut
-                        if qStatus.hasShortcutQuest and not qStatus.isShortcutDone then
-                            safeTeleport(SHORTCUT_POS)
-                            task.wait(0.5)
-                        end
-
-                        attempts = attempts + 1
-                        task.wait(0.3)
-                    end
-
-                    -- Step 4: วาร์ปไปส่งงานทันทีหลังเควสเขียว
-                    local targetObj = getTargetLocation()
-                    if targetObj then
-                        local targetPart = targetObj:IsA("BasePart") and targetObj or targetObj:FindFirstChildWhichIsA("BasePart", true)
-                        if targetPart then
-                            safeTeleport(targetPart.Position)
-                            task.wait(0.5)
-
-                            -- ยิง Remote จบงาน
-                            local remotes = {"deliveryfinserv", "deliveryfin", "delinterrupt"}
-                            for _, remoteName in ipairs(remotes) do
-                                local remote = ReplicatedStorage:FindFirstChild(remoteName, true) or Workspace:FindFirstChild(remoteName, true)
-                                if remote and remote:IsA("RemoteEvent") then
-                                    remote:FireServer(targetObj.Name)
-                                    remote:FireServer()
-                                end
-                            end
-                        end
-                    end
-                end
-
+                end -- จบเงื่อนไขเช็กระยะ 300m
                 task.wait(1.5)
             end
         end
     end
 end)
 
--- UI Toggle Button (โครงสร้างเดิมที่ทำงานได้)
+-- UI Toggle Button (สร้างคลอบแบบปลอดภัย)
+pcall(function()
+    local oldGui = (gethui and gethui():FindFirstChild("FixPickup150TPGui")) or CoreGui:FindFirstChild("FixPickup150TPGui")
+    if oldGui then oldGui:Destroy() end
+end)
+
 local ScreenGui = Instance.new("ScreenGui")
 local ToggleButton = Instance.new("TextButton")
 local UICorner = Instance.new("UICorner")
