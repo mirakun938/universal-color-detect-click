@@ -6,11 +6,11 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 local autoFarmActive = false
 
--- ค่ากำหนดระยะ
+-- ระยะตรวจจับ NPC (150 Studs)
 local NPC_SAFE_DISTANCE = 150
-local SHORTCUT_POS = Vector3.new(-135.0, 5.7, 3447.1)
 
-print("[Taxi Script] Loading Script...")
+-- พิกัดจุดทางลัด
+local SHORTCUT_POS = Vector3.new(-135.0, 5.7, 3447.1)
 
 -- ค้นหาตัวรถ
 local function getVehicleModel()
@@ -38,7 +38,7 @@ local function getVehicleModel()
     return vehicle, rootPart
 end
 
--- 1. เช็กสายตา Player อื่น (SCP-173 Style)
+-- 1. เช็กว่ามี Player อื่นหันกล้อง/หน้ามาทางเราหรือไม่ (SCP-173 Style)
 local function isAnyPlayerLookingAtUs()
     local _, myRoot = getVehicleModel()
     if not myRoot then return false end
@@ -60,7 +60,7 @@ local function isAnyPlayerLookingAtUs()
                         
                         local rayResult = Workspace:Raycast(pRoot.Position, (myRoot.Position - pRoot.Position), rayParams)
                         if not rayResult then
-                            return true 
+                            return true -- มีคนมองเห็นเราอยู่!
                         end
                     end
                 end
@@ -70,7 +70,7 @@ local function isAnyPlayerLookingAtUs()
     return false
 end
 
--- 2. เช็กระยะ NPC
+-- 2. เช็กระยะ NPC 150 Studs
 local function isPlayerNearNPC(npcPos)
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -92,9 +92,10 @@ local function waitUntilUnseen()
     end
 end
 
--- Teleport
+-- Safe Teleport
 local function safeTeleport(targetPos)
     waitUntilUnseen()
+    
     local vehicle, rootPart = getVehicleModel()
     if not rootPart then return false end
 
@@ -129,6 +130,7 @@ local function safeTeleport(targetPos)
             part.CanCollide = true
         end
     end
+
     return true
 end
 
@@ -175,9 +177,9 @@ local function checkQuestStatus()
     return status
 end
 
--- ค้นหาจุดหมายปลายทาง
+-- ค้นหาจุดหมาย
 local function getTargetLocation()
-    local locationsFolder = Workspace:FindFirstChild("locations") or Workspace:FindFirstChild("Locations")
+    local locationsFolder = Workspace:FindFirstChild("locations")
     if not locationsFolder then return nil end
 
     local targetName = nil
@@ -211,12 +213,12 @@ local function getTargetLocation()
     return locationsFolder:GetChildren()[1]
 end
 
--- ค้นหาและรับ NPC
+-- รับผู้โดยสาร
 local function tryPickupPassenger()
     local vehicle, rootPart = getVehicleModel()
     if not rootPart then return false end
 
-    local npcsFolder = Workspace:FindFirstChild("npcs") or Workspace:FindFirstChild("NPCs") or Workspace:FindFirstChild("Customers")
+    local npcsFolder = Workspace:FindFirstChild("npcs")
     if not npcsFolder then return false end
 
     for _, npc in ipairs(npcsFolder:GetChildren()) do
@@ -254,9 +256,8 @@ task.spawn(function()
         task.wait(0.5)
         if autoFarmActive do
             local vehicle, rootPart = getVehicleModel()
-            if not rootPart then
-                warn("[Taxi Script] Warning: Player is not in a vehicle seat!")
-            else
+            if rootPart then
+                
                 local qStatus = checkQuestStatus()
                 local passengerSeated = qStatus.hasPassengerOnBoard
 
@@ -318,54 +319,54 @@ task.spawn(function()
                         end
                     end
                 end
+
+                task.wait(1.0)
             end
         end
     end
 end)
 
--- UI Creation (ปรับปรุงให้รองรับทุก Executor)
-local parentGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-if gethui then
-    parentGui = gethui()
-elseif CoreGui then
-    parentGui = CoreGui
+-- ==================== [ส่วนการสร้าง UI แบบ การันตีติด 100%] ====================
+local guiName = "SCP173AutoFarmGui_Fixed"
+
+-- ลบ UI เก่าทิ้งถ้ามีค้างอยู่
+local targetContainer = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
+if targetContainer:FindFirstChild(guiName) then
+    targetContainer[guiName]:Destroy()
 end
 
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "TaxiAutoFarmDebugGui"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.Parent = parentGui
-
 local ToggleButton = Instance.new("TextButton")
 local UICorner = Instance.new("UICorner")
 
-ToggleButton.Name = "TaxiBtn"
+ScreenGui.Name = guiName
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = targetContainer
+
+ToggleButton.Name = "TPMainBtn"
 ToggleButton.Parent = ScreenGui
 ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-ToggleButton.Position = UDim2.new(0.02, 0, 0.4, 0)
-ToggleButton.Size = UDim2.new(0, 200, 0, 50)
+ToggleButton.Position = UDim2.new(0.05, 0, 0.4, 0) -- ปรับตำแหน่งให้อยู่ฝั่งซ้ายของจอชัดเจน
+ToggleButton.Size = UDim2.new(0, 220, 0, 55)
 ToggleButton.Font = Enum.Font.SourceSansBold
-ToggleButton.Text = "AUTO FARM: OFF"
+ToggleButton.Text = "AUTO FARM (SCP-173): OFF"
 ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 ToggleButton.TextSize = 16.00
 ToggleButton.Active = true
 ToggleButton.Draggable = true
 
-UICorner.CornerRadius = UDim.new(0, 8)
+UICorner.CornerRadius = UDim.new(0, 10)
 UICorner.Parent = ToggleButton
 
 ToggleButton.MouseButton1Click:Connect(function()
     autoFarmActive = not autoFarmActive
     if autoFarmActive then
-        ToggleButton.Text = "AUTO FARM: ON"
+        ToggleButton.Text = "AUTO FARM (SCP-173): ON"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
-        print("[Taxi Script] Auto Farm Started")
     else
-        ToggleButton.Text = "AUTO FARM: OFF"
+        ToggleButton.Text = "AUTO FARM (SCP-173): OFF"
         ToggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-        print("[Taxi Script] Auto Farm Stopped")
     end
 end)
-
-print("[Taxi Script] Script Loaded Successfully!")
     
