@@ -3,7 +3,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 local isHolding = false
-local spamSpeed = 0.05 -- ปรับความเร็วในการสแปม (ยิ่งน้อยยิ่งเร็ว)
+local spamSpeed = 0.03 -- ระยะเวลารอปุ่มปล่อยและกดใหม่ (ยิ่งน้อยยิ่งสแปมเร็ว)
 
 -- ฟังก์ชันค้นหาปุ่ม Click ใน Use
 local function findClickButton()
@@ -21,21 +21,30 @@ end
 local clickButton = findClickButton()
 
 if clickButton then
-    -- ฟังก์ชันรันสแปมเมื่อกดค้าง
+    -- ฟังก์ชันยิงสัญญาณ กด และ ปล่อย (Press -> Release Sequence)
+    local function triggerAttackSequence()
+        if firesignal then
+            -- 1. ยิงสัญญาณกดลง (Press)
+            firesignal(clickButton.MouseButton1Down)
+            task.wait(0.01)
+            -- 2. ยิงสัญญาณปล่อย (Release) เพื่อให้การโจมตีทำงาน
+            firesignal(clickButton.MouseButton1Up)
+            firesignal(clickButton.MouseButton1Click)
+            firesignal(clickButton.Activated)
+        end
+    end
+
+    -- ลูปสแปมการโจมตีเมื่อกดปุ่มค้างไว้
     local function startSpam()
         task.spawn(function()
             while isHolding do
-                -- จำลองการกดปุ่ม Click ด้วย firesignal หรือ VirtualInput
-                if firesignal then
-                    firesignal(clickButton.MouseButton1Click)
-                    firesignal(clickButton.Activated)
-                end
+                triggerAttackSequence()
                 task.wait(spamSpeed)
             end
         end)
     end
 
-    -- ตรวจจับการกดปุ่มค้าง (MouseButton1Down / InputBegan)
+    -- ตรวจจับเมื่อผู้เล่นเริ่มกดค้างที่ปุ่ม
     clickButton.MouseButton1Down:Connect(function()
         if not isHolding then
             isHolding = true
@@ -43,7 +52,7 @@ if clickButton then
         end
     end)
 
-    -- ตรวจจับการปล่อยปุ่ม (MouseButton1Up / MouseLeave)
+    -- ตรวจจับเมื่อผู้เล่นปล่อยนิ้วออกจากปุ่มจริง
     clickButton.MouseButton1Up:Connect(function()
         isHolding = false
     end)
@@ -52,7 +61,7 @@ if clickButton then
         isHolding = false
     end)
 
-    print("ติดตั้งระบบ Hold to Spam ให้กับปุ่ม Use เรียบร้อยแล้ว")
+    print("ติดตั้งระบบ Release to Attack Spam ให้กับปุ่ม Use เรียบร้อยแล้ว!")
 else
-    warn("ไม่พบปุ่ม Click ใน Gui ตัวเกม")
+    warn("ไม่พบปุ่ม Click ใน PlayerGui")
 end
