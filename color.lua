@@ -1,16 +1,17 @@
 local Players = game:GetService("Players")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 local isHolding = false
-local spamSpeed = 0.03 -- ระยะเวลารอปุ่มปล่อยและกดใหม่ (ยิ่งน้อยยิ่งสแปมเร็ว)
+local spamDelay = 0.03 -- ปรับความเร็วในการสแปม (ยิ่งน้อยยิ่งเร็ว)
 
--- ฟังก์ชันค้นหาปุ่ม Click ใน Use
-local function findClickButton()
+-- ฟังก์ชันค้นหาปุ่ม Click หรือ Use
+local function getClickButton()
     for _, gui in ipairs(PlayerGui:GetDescendants()) do
         if gui.Name == "Use" then
-            local clickBtn = gui:FindFirstChild("Click")
-            if clickBtn and (clickBtn:IsA("GuiButton") or clickBtn:IsA("TextButton") or clickBtn:IsA("ImageButton")) then
+            local clickBtn = gui:FindFirstChild("Click") or gui
+            if clickBtn:IsA("GuiObject") then
                 return clickBtn
             end
         end
@@ -18,50 +19,52 @@ local function findClickButton()
     return nil
 end
 
-local clickButton = findClickButton()
+local targetBtn = getClickButton()
 
-if clickButton then
-    -- ฟังก์ชันยิงสัญญาณ กด และ ปล่อย (Press -> Release Sequence)
-    local function triggerAttackSequence()
-        if firesignal then
-            -- 1. ยิงสัญญาณกดลง (Press)
-            firesignal(clickButton.MouseButton1Down)
-            task.wait(0.01)
-            -- 2. ยิงสัญญาณปล่อย (Release) เพื่อให้การโจมตีทำงาน
-            firesignal(clickButton.MouseButton1Up)
-            firesignal(clickButton.MouseButton1Click)
-            firesignal(clickButton.Activated)
-        end
+if targetBtn then
+    -- ฟังก์ชันยิงการแตะหน้าจอ (Touch / Mouse Press & Release)
+    local function sendClickAtButton()
+        local pos = targetBtn.AbsolutePosition
+        local size = targetBtn.AbsoluteSize
+        -- คำนวณจุดกึ่งกลางของปุ่มบนหน้าจอ
+        local centerX = pos.X + (size.X / 2)
+        local centerY = pos.Y + (size.Y / 2) + 36 -- +36 สำหรับชดเชยแถบ Topbar ของ Roblox
+
+        -- 1. ส่งสัญญาณ Touch/Click ลง
+        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
+        task.wait(0.01)
+        -- 2. ส่งสัญญาณ Touch/Click ปล่อยทันทีเพื่อให้โจมตีออก
+        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
     end
 
-    -- ลูปสแปมการโจมตีเมื่อกดปุ่มค้างไว้
+    -- ลูปสแปมเมื่อกดค้าง
     local function startSpam()
         task.spawn(function()
             while isHolding do
-                triggerAttackSequence()
-                task.wait(spamSpeed)
+                sendClickAtButton()
+                task.wait(spamDelay)
             end
         end)
     end
 
-    -- ตรวจจับเมื่อผู้เล่นเริ่มกดค้างที่ปุ่ม
-    clickButton.MouseButton1Down:Connect(function()
-        if not isHolding then
-            isHolding = true
-            startSpam()
+    -- ตรวจจับเมื่อผู้เล่นกดค้างที่ปุ่ม
+    targetBtn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            if not isHolding then
+                isHolding = true
+                startSpam()
+            end
         end
     end)
 
-    -- ตรวจจับเมื่อผู้เล่นปล่อยนิ้วออกจากปุ่มจริง
-    clickButton.MouseButton1Up:Connect(function()
-        isHolding = false
+    -- ตรวจจับเมื่อผู้เล่นปล่อยนิ้ว/คลิก
+    targetBtn.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            isHolding = false
+        end
     end)
 
-    clickButton.MouseLeave:Connect(function()
-        isHolding = false
-    end)
-
-    print("ติดตั้งระบบ Release to Attack Spam ให้กับปุ่ม Use เรียบร้อยแล้ว!")
+    print("ติดตั้งระบบ Touch/Click Spam สำหรับปุ่ม Use สำเร็จ!")
 else
-    warn("ไม่พบปุ่ม Click ใน PlayerGui")
+    warn("ไม่พบปุ่ม Use บน UI หน้าจอ")
 end
