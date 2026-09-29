@@ -1,70 +1,80 @@
 local Players = game:GetService("Players")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local CoreGui = game:GetService("CoreGui")
+
 local LocalPlayer = Players.LocalPlayer
-local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-
 local isHolding = false
-local spamDelay = 0.03 -- ปรับความเร็วในการสแปม (ยิ่งน้อยยิ่งเร็ว)
+local spamSpeed = 0.03 -- ความเร็วในการสแปม (ยิ่งน้อยยิ่งเร็ว)
 
--- ฟังก์ชันค้นหาปุ่ม Click หรือ Use
-local function getClickButton()
-    for _, gui in ipairs(PlayerGui:GetDescendants()) do
-        if gui.Name == "Use" then
-            local clickBtn = gui:FindFirstChild("Click") or gui
-            if clickBtn:IsA("GuiObject") then
-                return clickBtn
-            end
-        end
-    end
-    return nil
+-- ลบ UI เก่าออกหากมีอยู่
+pcall(function()
+    local oldGui = (gethui and gethui():FindFirstChild("UseSpamOverlayGui")) or CoreGui:FindFirstChild("UseSpamOverlayGui")
+    if oldGui then oldGui:Destroy() end
+end)
+
+-- สร้าง ScreenGui และ ปุ่มสำหรับกดค้าง
+local ScreenGui = Instance.new("ScreenGui")
+local HoldButton = Instance.new("TextButton")
+local UICorner = Instance.new("UICorner")
+
+ScreenGui.Name = "UseSpamOverlayGui"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
+
+HoldButton.Name = "HoldSpamBtn"
+HoldButton.Parent = ScreenGui
+-- ตั้งค่าปุ่มให้อยู่โซนขวาล่าง (บริเวณปุ่ม Use)
+HoldButton.Position = UDim2.new(0.82, 0, 0.65, 0)
+HoldButton.Size = UDim2.new(0, 80, 0, 80)
+HoldButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+HoldButton.BackgroundTransparency = 0.6 -- ปุ่มโปร่งแสงเพื่อให้เห็นปุ่มเดิมด้านหลัง
+HoldButton.Text = "SPAM\nATTACK"
+HoldButton.TextColor3 = Color3.fromRGB(0, 0, 0)
+HoldButton.TextSize = 14
+HoldButton.Font = Enum.Font.SourceSansBold
+HoldButton.Active = true
+HoldButton.Draggable = true -- สามารถกดลากปรับตำแหน่งให้ตรงกับปุ่ม Use ได้
+
+UICorner.CornerRadius = UDim.new(0, 40) -- ปุ่มทรงกลม
+UICorner.Parent = HoldButton
+
+-- ฟังก์ชันยิงการแตะ/คลิกตรงพิกัดของปุ่มนี้
+local function clickAtButtonPosition()
+    local pos = HoldButton.AbsolutePosition
+    local size = HoldButton.AbsoluteSize
+    local centerX = pos.X + (size.X / 2)
+    local centerY = pos.Y + (size.Y / 2) + 36 -- ชดเชยระยะ Topbar
+
+    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
+    task.wait(0.01)
+    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
 end
 
-local targetBtn = getClickButton()
-
-if targetBtn then
-    -- ฟังก์ชันยิงการแตะหน้าจอ (Touch / Mouse Press & Release)
-    local function sendClickAtButton()
-        local pos = targetBtn.AbsolutePosition
-        local size = targetBtn.AbsoluteSize
-        -- คำนวณจุดกึ่งกลางของปุ่มบนหน้าจอ
-        local centerX = pos.X + (size.X / 2)
-        local centerY = pos.Y + (size.Y / 2) + 36 -- +36 สำหรับชดเชยแถบ Topbar ของ Roblox
-
-        -- 1. ส่งสัญญาณ Touch/Click ลง
-        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
-        task.wait(0.01)
-        -- 2. ส่งสัญญาณ Touch/Click ปล่อยทันทีเพื่อให้โจมตีออก
-        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
-    end
-
-    -- ลูปสแปมเมื่อกดค้าง
-    local function startSpam()
-        task.spawn(function()
-            while isHolding do
-                sendClickAtButton()
-                task.wait(spamDelay)
-            end
-        end)
-    end
-
-    -- ตรวจจับเมื่อผู้เล่นกดค้างที่ปุ่ม
-    targetBtn.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            if not isHolding then
-                isHolding = true
-                startSpam()
-            end
+-- ลูปสแปม
+local function startSpam()
+    task.spawn(function()
+        while isHolding do
+            clickAtButtonPosition()
+            task.wait(spamSpeed)
         end
     end)
-
-    -- ตรวจจับเมื่อผู้เล่นปล่อยนิ้ว/คลิก
-    targetBtn.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            isHolding = false
-        end
-    end)
-
-    print("ติดตั้งระบบ Touch/Click Spam สำหรับปุ่ม Use สำเร็จ!")
-else
-    warn("ไม่พบปุ่ม Use บน UI หน้าจอ")
 end
+
+-- ตรวจจับการกดค้างที่ปุ่มลอย
+HoldButton.MouseButton1Down:Connect(function()
+    if not isHolding then
+        isHolding = true
+        HoldButton.BackgroundColor3 = Color3.fromRGB(50, 255, 50)
+        startSpam()
+    end
+end)
+
+HoldButton.MouseButton1Up:Connect(function()
+    isHolding = false
+    HoldButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+end)
+
+HoldButton.MouseLeave:Connect(function()
+    isHolding = false
+    HoldButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+end)
