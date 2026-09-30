@@ -10,20 +10,35 @@ local Camera = Workspace.CurrentCamera
 -- ตั้งค่าระบบ
 local TARGET_ANIM_ID = "75098348371396" -- ID Animation วาร์ป/อมตะ
 local SPAM_SPEED = 0.03                  -- ความเร็วในการสแปมคลิก
-local PAUSE_DURATION = 1.0               -- ระยะเวลาพักการสแปม (วินาที)
-local TELEPORT_THRESHOLD = 6.0           -- ระยะขยับกะทันหันที่นับว่าวาร์ป (กัน Endlag กระตุกสั้นๆ)
+local PAUSE_DURATION = 1.0               -- ระยะเวลาพักการสแปมปกติ (วินาที)
+local TELEPORT_THRESHOLD = 6.0           -- ระยะขยับกะทันหันที่นับว่าวาร์ป
+local FAR_DISTANCE = 15.0                -- ระยะห่างจากตัวเราที่ถือว่าอยู่ไกล (ฟันไม่ถึง)
+
+-- ตัวแปรตรวจจับการวาร์ปรัวๆ
+local TP_BURST_COUNT = 3                 -- จำนวนครั้งการวาร์ปรัว
+local TP_BURST_WINDOW = 0.45             -- กรอบเวลาการวาร์ปรัว (วินาที)
 
 local isHolding = false
 local isLocked = true
 local pauseEndTime = 0
+local tpHistory = {}                     -- เก็บประวัติเวลาที่บอสวาร์ป
 
 local currentBossHum = nil
 local lastBossPos = nil
 local animConnection = nil
 
+local myChar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local myRoot = myChar:WaitForChild("HumanoidRootPart", 5)
+
+LocalPlayer.CharacterAdded:Connect(function(newChar)
+    myChar = newChar
+    myRoot = newChar:WaitForChild("HumanoidRootPart", 5)
+    Camera = Workspace.CurrentCamera
+end)
+
 -- ลบ UI เก่าออก
 pcall(function()
-    local oldGui = (gethui and gethui():FindFirstChild("LMBSpamUltraGui")) or CoreGui:FindFirstChild("LMBSpamUltraGui")
+    local oldGui = (gethui and gethui():FindFirstChild("LMBSpamAdvancedGui")) or CoreGui:FindFirstChild("LMBSpamAdvancedGui")
     if oldGui then oldGui:Destroy() end
 end)
 
@@ -38,7 +53,7 @@ local LockCorner = Instance.new("UICorner")
 local StatusLabel = Instance.new("TextLabel")
 local StatusCorner = Instance.new("UICorner")
 
-ScreenGui.Name = "LMBSpamUltraGui"
+ScreenGui.Name = "LMBSpamAdvancedGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
@@ -135,7 +150,17 @@ local function triggerPause(reasonText)
     end
 end
 
--- ระบบตรวจจับ Animation ตลอดเวลา (Background Listener)
+-- สั่ง ยกเลิก Pause ทันที
+local function cancelPause(reasonText)
+    pauseEndTime = 0
+    StatusLabel.Text = "⚡ " .. reasonText
+    StatusLabel.TextColor3 = Color3.fromRGB(0, 220, 255)
+    if isHolding then
+        HoldButton.BackgroundColor3 = Color3.fromRGB(50, 220, 50)
+    end
+end
+
+-- ระบบดักจับ Animation ID ตลอดเวลา
 local function updateAnimationTracker(bossHum)
     if bossHum and bossHum ~= currentBossHum then
         currentBossHum = bossHum
@@ -153,20 +178,47 @@ local function updateAnimationTracker(bossHum)
     end
 end
 
--- ลูปตรวจจับตำแหน่งวาร์ปสำรอง + รัน Tracker ตลอดเวลา (Heartbeat)
+-- ลูปเช็กการ Teleport / ระยะห่าง / การวาร์ปรัว 3 ครั้ง
 RunService.Heartbeat:Connect(function()
+    local now = tick()
     local bossHum, bossRoot = getBossInfo()
     
     if bossHum and bossRoot then
-        -- 1. ผูก Event ตรวจ Animation ตลอดเวลา (ไม่ว่าจะกดปุ่มอยู่หรือไม่)
         updateAnimationTracker(bossHum)
         
-        -- 2. ระบบตรวจการ Teleport สำรอง (กรณีไม่เล่น Animation)
         local currentPos = bossRoot.Position
+        
         if lastBossPos then
             local movedDist = (currentPos - lastBossPos).Magnitude
+            
+            -- ตรวจพบการวาร์ป
             if movedDist >= TELEPORT_THRESHOLD then
-                triggerPause("TELEPORT DETECTED!")
+                table.insert(tpHistory, now)
+                
+                -- เคลียร์ประวัติวาร์ปที่เกินช่วงเวลา 0.45 วินาทีออก
+                for i = #tpHistory, 1, -1 do
+                    if now - tpHistory[i] > TP_BURST_WINDOW then
+                        table.remove(tpHistory, i)
+                    end
+                end
+                
+                -- เงื่อนไข 1: ถ้าวาร์ป 3 ครั้งภายใน 0.45 วิ -> ยกเลิก Pause ทันที
+                if #tpHistory >= TP_BURST_COUNT then
+                    cancelPause("BURST TP! CANCEL PAUSE")
+                    tpHistory = {} -- ล้างประวัติ
+                else
+                    -- เช็กระยะห่างระหว่างบอสกับตัวเรา
+                    if myRoot and myRoot.Parent then
+                        local distToPlayer = (currentPos - myRoot.Position).Magnitude
+                        
+                        -- เงื่อนไข 2: ถ้าวาร์ปไปไกลเกินระยะ 15 Studs -> สั่ง Pause 1 วิ
+                        if distToPlayer >= FAR_DISTANCE then
+                            triggerPause("TOO FAR! PAUSED")
+                        else
+                            triggerPause("TELEPORT DETECTED!")
+                        end
+                    end
+                end
             end
         end
         lastBossPos = currentPos
@@ -176,7 +228,7 @@ RunService.Heartbeat:Connect(function()
     end
 
     -- อัปเดต UI เมื่อไม่ได้กดปุ่มและหมดระยะเวลา Pause
-    if not isHolding and tick() >= pauseEndTime then
+    if not isHolding and now >= pauseEndTime then
         StatusLabel.Text = "🛡️ SYSTEM READY"
         StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
     end
@@ -199,11 +251,11 @@ local function startSpam()
         while isHolding do
             local currentTime = tick()
 
-            -- ถ้ายังไม่พ้นช่วง Pause สคริปต์จะไม่ยิงคลิก
+            -- ถ้ายังอยู่ในช่วง Pause จะไม่ยิงสแปม
             if currentTime < pauseEndTime then
                 HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
             else
-                StatusLabel.Text = "⚔️ SPAMMING ATTACK..."
+                StatusLabel.Text = "⚔️️ SPAMMING ATTACK..."
                 StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
                 HoldButton.BackgroundColor3 = Color3.fromRGB(50, 220, 50)
                 
