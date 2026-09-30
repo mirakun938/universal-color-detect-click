@@ -1,4 +1,5 @@
 local Players = game:GetService("Players")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 local Workspace = game:GetService("Workspace")
 local SoundService = game:GetService("SoundService")
 local RunService = game:GetService("RunService")
@@ -9,103 +10,195 @@ local Camera = Workspace.CurrentCamera
 
 -- ตั้งค่าระบบ
 local TARGET_SOUND_ID = "108688312097046" -- Sound ID: Smoke_Teleport_Poof_4
-local LOCK_DURATION = 0.5                  -- ระยะเวลาในการล็อคมอง (วินาที)
+local SPAM_SPEED = 0.03                     -- ความเร็วในการสแปมคลิก (วินาที)
 
-local isLocking = false
-local lockEndTime = 0
-local currentTargetRoot = nil
-local lastFaceTime = 0
-local trackedSounds = {}                   -- บันทึก Event เสียงที่ผูกไว้แล้ว
+-- แยกการ Pause ระยะใกล้ และ ระยะไกล
+local CLOSE_PAUSE_DURATION = 0.35           -- ระยะเวลาพักการสแปมกรณี "อยู่ใกล้" (วินาที)
+local FAR_PAUSE_DURATION = 1.0              -- ระยะเวลาพักการสแปมกรณี "อยู่ไกล" (วินาที)
+local FAR_DISTANCE = 15.0                   -- ระยะห่างที่นับว่าเป็นระยะไกล (Studs)
+
+-- ตัวแปรระบบ Burst Teleport
+local TP_BURST_COUNT = 3                    -- จำนวนครั้งการเล่นเสียงรัว
+local TP_BURST_WINDOW = 0.45                -- กรอบเวลาการเล่นเสียงรัว (วินาที)
+
+local isHolding = false
+local isLocked = true
+local pauseEndTime = 0
+local soundHistory = {}                     -- ประวัติเวลาเล่นเสียง
+local trackedSounds = {}                    -- บันทึก Event เสียงที่ผูกไว้แล้ว
 
 local myChar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local myRoot = myChar:WaitForChild("HumanoidRootPart", 5)
 
--- อัปเดตเมื่อเกิดใหม่
 LocalPlayer.CharacterAdded:Connect(function(newChar)
     myChar = newChar
     myRoot = newChar:WaitForChild("HumanoidRootPart", 5)
     Camera = Workspace.CurrentCamera
-    isLocking = false
-    currentTargetRoot = nil
 end)
 
 -- ลบ UI เก่าออก
 pcall(function()
-    local oldGui = (gethui and gethui():FindFirstChild("BossTrackerAudioGui")) or CoreGui:FindFirstChild("BossTrackerAudioGui")
+    local oldGui = (gethui and gethui():FindFirstChild("LMBSpamAudioSplitGui")) or CoreGui:FindFirstChild("LMBSpamAudioSplitGui")
     if oldGui then oldGui:Destroy() end
 end)
 
--- สร้าง UI แสดงสถานะ
+-- สร้าง UI
 local ScreenGui = Instance.new("ScreenGui")
-local StatusLabel = Instance.new("TextLabel")
-local UICorner = Instance.new("UICorner")
+local HoldButton = Instance.new("TextButton")
+local HoldCorner = Instance.new("UICorner")
 
-ScreenGui.Name = "BossTrackerAudioGui"
+local LockButton = Instance.new("TextButton")
+local LockCorner = Instance.new("UICorner")
+
+local StatusLabel = Instance.new("TextLabel")
+local StatusCorner = Instance.new("UICorner")
+
+ScreenGui.Name = "LMBSpamAudioSplitGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
+-- 1. ปุ่มสแปมหลัก
+HoldButton.Name = "HoldSpamBtn"
+HoldButton.Parent = ScreenGui
+HoldButton.AnchorPoint = Vector2.new(0.5, 0.5)
+HoldButton.Position = UDim2.new(0.5, 0, 0.5, 0)
+HoldButton.Size = UDim2.new(0, 90, 0, 90)
+HoldButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
+HoldButton.BackgroundTransparency = 0.3
+HoldButton.Text = "HOLD TO\nSPAM LMB"
+HoldButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+HoldButton.TextSize = 14
+HoldButton.Font = Enum.Font.SourceSansBold
+HoldButton.Active = true
+HoldButton.Draggable = not isLocked
+
+HoldCorner.CornerRadius = UDim.new(0, 45)
+HoldCorner.Parent = HoldButton
+
+-- 2. ปุ่ม ล็อค/ปลดล็อก
+LockButton.Name = "LockToggleBtn"
+LockButton.Parent = ScreenGui
+LockButton.AnchorPoint = Vector2.new(0.5, 0)
+LockButton.Position = UDim2.new(0.5, 0, 0.5, 55)
+LockButton.Size = UDim2.new(0, 70, 0, 25)
+LockButton.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+LockButton.BackgroundTransparency = 0.2
+LockButton.Text = "🔒 Lock"
+LockButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+LockButton.TextSize = 12
+LockButton.Font = Enum.Font.SourceSansBold
+LockButton.Active = true
+
+LockCorner.CornerRadius = UDim.new(0, 6)
+LockCorner.Parent = LockButton
+
+LockButton.MouseButton1Click:Connect(function()
+    isLocked = not isLocked
+    HoldButton.Draggable = not isLocked
+    
+    if isLocked then
+        LockButton.Text = "🔒 Lock"
+        LockButton.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    else
+        LockButton.Text = "🔓 Unlock"
+        LockButton.BackgroundColor3 = Color3.fromRGB(200, 120, 0)
+    end
+end)
+
+-- 3. แถบแสดงสถานะ
 StatusLabel.Name = "StatusLabel"
 StatusLabel.Parent = ScreenGui
 StatusLabel.AnchorPoint = Vector2.new(0.5, 0)
 StatusLabel.Position = UDim2.new(0.5, 0, 0.1, 0)
-StatusLabel.Size = UDim2.new(0, 260, 0, 40)
+StatusLabel.Size = UDim2.new(0, 260, 0, 35)
 StatusLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 StatusLabel.BackgroundTransparency = 0.3
-StatusLabel.Text = "🔍 WAITING FOR BOSS SOUND..."
-StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
-StatusLabel.TextSize = 14
+StatusLabel.Text = "🛡️ SOUND SYSTEM READY"
+StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
+StatusLabel.TextSize = 13
 StatusLabel.Font = Enum.Font.SourceSansBold
 
-UICorner.CornerRadius = UDim.new(0, 8)
-UICorner.Parent = StatusLabel
+StatusCorner.CornerRadius = UDim.new(0, 8)
+StatusCorner.Parent = StatusLabel
 
 -- ค้นหาบอสใน Workspace.Misc.AI
 local function getBossRoot()
     local miscFolder = Workspace:FindFirstChild("Misc")
-    if not miscFolder then return nil, nil end
+    if not miscFolder then return nil end
     local aiFolder = miscFolder:FindFirstChild("AI")
-    if not aiFolder then return nil, nil end
+    if not aiFolder then return nil end
 
     for _, child in ipairs(aiFolder:GetChildren()) do
         if child:IsA("Model") then
             local hum = child:FindFirstChildOfClass("Humanoid")
-            if hum and hum.Health > 0 then
-                local root = child:FindFirstChild("HumanoidRootPart") or child:FindFirstChildWhichIsA("BasePart")
-                if root then
-                    return root, child.Name
-                end
+            local root = child:FindFirstChild("HumanoidRootPart") or child:FindFirstChildWhichIsA("BasePart")
+            if hum and hum.Health > 0 and root then
+                return root
             end
         end
     end
-    return nil, nil
+    return nil
 end
 
--- ฟังก์ชันหมุนมุมมองเข้าหาบอส
-local function safeFaceTarget(targetRoot)
-    if not myRoot or not myRoot.Parent or not targetRoot or not targetRoot.Parent then return end
-    
-    local targetPos = targetRoot.Position
-    local currentCam = Workspace.CurrentCamera or Camera
-    
-    -- 1. หมุนตัวละคร
-    myRoot.CFrame = CFrame.lookAt(myRoot.Position, Vector3.new(targetPos.X, myRoot.Position.Y, targetPos.Z))
-    
-    -- 2. หมุนกล้องตาม
-    if currentCam then
-        currentCam.CFrame = CFrame.lookAt(currentCam.CFrame.Position, targetPos)
+-- สั่ง Trigger Pause ระยะไกล (1 วินาที)
+local function triggerFarPause()
+    pauseEndTime = tick() + FAR_PAUSE_DURATION
+    StatusLabel.Text = "🛑 SOUND: TOO FAR! (" .. FAR_PAUSE_DURATION .. "s)"
+    StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+    if isHolding then
+        HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
     end
 end
 
--- ฟังก์ชันเมื่อตรวจจับพบเสียงวาร์ป
-local function onSoundDetected()
-    local bossRoot, bossName = getBossRoot()
-    if bossRoot then
-        isLocking = true
-        lockEndTime = tick() + LOCK_DURATION
-        currentTargetRoot = bossRoot
-        
-        StatusLabel.Text = "⚡ " .. bossName:upper() .. " SOUND TELEPORT!"
-        StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+-- สั่ง Trigger Pause ระยะใกล้ (0.35 วินาที)
+local function triggerClosePause()
+    pauseEndTime = tick() + CLOSE_PAUSE_DURATION
+    StatusLabel.Text = "⚠️ SOUND: CLOSE RANGE! (" .. CLOSE_PAUSE_DURATION .. "s)"
+    StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 0)
+    if isHolding then
+        HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+    end
+end
+
+-- สั่ง ยกเลิก Pause ทันที
+local function cancelPause(reasonText)
+    pauseEndTime = 0
+    StatusLabel.Text = "⚡ " .. reasonText
+    StatusLabel.TextColor3 = Color3.fromRGB(0, 220, 255)
+    if isHolding then
+        HoldButton.BackgroundColor3 = Color3.fromRGB(50, 220, 50)
+    end
+end
+
+-- ฟังก์ชันประมวลผลเมื่อตรวจพบการเล่นเสียง
+local function onSoundTriggered(soundObj)
+    local now = tick()
+    table.insert(soundHistory, now)
+    
+    -- เคลียร์ประวัติที่เกินกรอบเวลา 0.45 วินาที
+    for i = #soundHistory, 1, -1 do
+        if now - soundHistory[i] > TP_BURST_WINDOW then
+            table.remove(soundHistory, i)
+        end
+    end
+
+    -- เงื่อนไข 1: เล่นเสียง 3 ครั้งใน 0.45 วินาที -> ยกเลิก Pause ทันที
+    if #soundHistory >= TP_BURST_COUNT then
+        cancelPause("BURST SOUND! CANCEL PAUSE")
+        soundHistory = {}
+    else
+        -- เช็กระยะห่างเพื่อแยก Pause ระยะใกล้ / ไกล
+        local bossRoot = getBossRoot()
+        if bossRoot and myRoot and myRoot.Parent then
+            local dist = (bossRoot.Position - myRoot.Position).Magnitude
+            if dist >= FAR_DISTANCE then
+                triggerFarPause()
+            else
+                triggerClosePause()
+            end
+        else
+            triggerClosePause()
+        end
     end
 end
 
@@ -116,19 +209,18 @@ local function checkAndTrackSound(inst)
         if soundIdStr:find(TARGET_SOUND_ID) then
             trackedSounds[inst] = true
             
-            -- ดักจับตอนเริ่มเล่นเสียงวาร์ป
             inst.Played:Connect(function()
-                onSoundDetected()
+                onSoundTriggered(inst)
             end)
             
             if inst.IsPlaying then
-                onSoundDetected()
+                onSoundTriggered(inst)
             end
         end
     end
 end
 
--- สแกนเสียงทั้งหมดใน Workspace และ SoundService
+-- สแกนเสียงทั้งใน Workspace และ SoundService
 local function scanAllSounds()
     for _, obj in ipairs(Workspace:GetDescendants()) do
         checkAndTrackSound(obj)
@@ -143,36 +235,61 @@ SoundService.DescendantAdded:Connect(checkAndTrackSound)
 
 scanAllSounds()
 
--- ลูปควบคุมกล้องและการหันมอง
+-- ลูปอัปเดต UI หน้าจอ
 RunService.Heartbeat:Connect(function()
-    local currentTime = tick()
-    
-    if not myRoot or not myRoot.Parent then
-        if LocalPlayer.Character then
-            myRoot = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-        end
+    local now = tick()
+    if not isHolding and now >= pauseEndTime then
+        StatusLabel.Text = "🛡️ SOUND SYSTEM READY"
+        StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
     end
+end)
 
-    -- ล็อคมองเมื่อตรวจพบเสียงวาร์ป
-    if isLocking then
-        if currentTime < lockEndTime and currentTargetRoot and currentTargetRoot.Parent then
-            -- ป้องกันการส่ง Packet ถี่เกินไปจำกัดความถี่ที่ 0.02s (ป้องกันการหลุดออกจากเกม)
-            if currentTime - lastFaceTime >= 0.02 then
-                lastFaceTime = currentTime
-                safeFaceTarget(currentTargetRoot)
+-- จำลองการคลิกเมาส์ซ้าย (LMB)
+local function clickLMB()
+    local viewportSize = Camera.ViewportSize
+    local centerX = viewportSize.X / 2
+    local centerY = viewportSize.Y / 2
+
+    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
+    task.wait(0.01)
+    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
+end
+
+-- ลูปสแปม LMB
+local function startSpam()
+    task.spawn(function()
+        while isHolding do
+            local currentTime = tick()
+
+            if currentTime < pauseEndTime then
+                HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+            else
+                StatusLabel.Text = "⚔️ SPAMMING ATTACK..."
+                StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
+                HoldButton.BackgroundColor3 = Color3.fromRGB(50, 220, 50)
+                
+                clickLMB()
             end
-        else
-            isLocking = false
-            currentTargetRoot = nil
+
+            task.wait(SPAM_SPEED)
         end
-    else
-        local bossRoot, bossName = getBossRoot()
-        if bossRoot then
-            StatusLabel.Text = "🎯 TRACKING: " .. bossName:upper()
-            StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
-        else
-            StatusLabel.Text = "🔍 WAITING FOR BOSS..."
-            StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
-        end
+    end)
+end
+
+-- ตรวจจับการกดค้าง
+HoldButton.MouseButton1Down:Connect(function()
+    if not isHolding then
+        isHolding = true
+        startSpam()
     end
+end)
+
+HoldButton.MouseButton1Up:Connect(function()
+    isHolding = false
+    HoldButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
+end)
+
+HoldButton.MouseLeave:Connect(function()
+    isHolding = false
+    HoldButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
 end)
