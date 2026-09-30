@@ -8,8 +8,12 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
--- ตั้งค่าระบบ
-local TARGET_SOUND_ID = "108688312097046" -- Sound ID: Smoke_Teleport_Poof_4
+-- รวม Sound ID ที่ใช้ตรวจจับวาร์ปทั้ง 2 ตัว
+local TARGET_SOUND_IDS = {
+    ["108688312097046"] = "Smoke_Teleport_Poof_4", --[span_3](start_span)[span_3](end_span)
+    ["108156925383225"] = "SidestepEnd"              --[span_4](start_span)[span_4](end_span)
+}
+
 local SPAM_SPEED = 0.03                     -- ความเร็วในการสแปมคลิก (วินาที)
 
 -- แยกการ Pause ระยะใกล้ และ ระยะไกล
@@ -38,7 +42,7 @@ end)
 
 -- ลบ UI เก่าออก
 pcall(function()
-    local oldGui = (gethui and gethui():FindFirstChild("LMBSpamAudioSplitGui")) or CoreGui:FindFirstChild("LMBSpamAudioSplitGui")
+    local oldGui = (gethui and gethui():FindFirstChild("LMBSpamMultiAudioGui")) or CoreGui:FindFirstChild("LMBSpamMultiAudioGui")
     if oldGui then oldGui:Destroy() end
 end)
 
@@ -53,7 +57,7 @@ local LockCorner = Instance.new("UICorner")
 local StatusLabel = Instance.new("TextLabel")
 local StatusCorner = Instance.new("UICorner")
 
-ScreenGui.Name = "LMBSpamAudioSplitGui"
+ScreenGui.Name = "LMBSpamMultiAudioGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
@@ -140,7 +144,7 @@ local function getBossRoot()
     return nil
 end
 
--- สั่ง Trigger Pause ระยะไกล (1 วินาที)
+-- สั่ง Trigger Pause ระยะไกล
 local function triggerFarPause()
     pauseEndTime = tick() + FAR_PAUSE_DURATION
     StatusLabel.Text = "🛑 SOUND: TOO FAR! (" .. FAR_PAUSE_DURATION .. "s)"
@@ -150,7 +154,7 @@ local function triggerFarPause()
     end
 end
 
--- สั่ง Trigger Pause ระยะใกล้ (0.35 วินาที)
+-- สั่ง Trigger Pause ระยะใกล้
 local function triggerClosePause()
     pauseEndTime = tick() + CLOSE_PAUSE_DURATION
     StatusLabel.Text = "⚠️ SOUND: CLOSE RANGE! (" .. CLOSE_PAUSE_DURATION .. "s)"
@@ -175,19 +179,16 @@ local function onSoundTriggered(soundObj)
     local now = tick()
     table.insert(soundHistory, now)
     
-    -- เคลียร์ประวัติที่เกินกรอบเวลา 0.45 วินาที
     for i = #soundHistory, 1, -1 do
         if now - soundHistory[i] > TP_BURST_WINDOW then
             table.remove(soundHistory, i)
         end
     end
 
-    -- เงื่อนไข 1: เล่นเสียง 3 ครั้งใน 0.45 วินาที -> ยกเลิก Pause ทันที
     if #soundHistory >= TP_BURST_COUNT then
         cancelPause("BURST SOUND! CANCEL PAUSE")
         soundHistory = {}
     else
-        -- เช็กระยะห่างเพื่อแยก Pause ระยะใกล้ / ไกล
         local bossRoot = getBossRoot()
         if bossRoot and myRoot and myRoot.Parent then
             local dist = (bossRoot.Position - myRoot.Position).Magnitude
@@ -206,21 +207,25 @@ end
 local function checkAndTrackSound(inst)
     if inst:IsA("Sound") and not trackedSounds[inst] then
         local soundIdStr = tostring(inst.SoundId)
-        if soundIdStr:find(TARGET_SOUND_ID) then
-            trackedSounds[inst] = true
-            
-            inst.Played:Connect(function()
-                onSoundTriggered(inst)
-            end)
-            
-            if inst.IsPlaying then
-                onSoundTriggered(inst)
+        
+        for targetId, _ in pairs(TARGET_SOUND_IDS) do
+            if soundIdStr:find(targetId) then
+                trackedSounds[inst] = true
+                
+                inst.Played:Connect(function()
+                    onSoundTriggered(inst)
+                end)
+                
+                if inst.IsPlaying then
+                    onSoundTriggered(inst)
+                end
+                break
             end
         end
     end
 end
 
--- สแกนเสียงทั้งใน Workspace และ SoundService
+-- สแกนเสียงทั้งหมด
 local function scanAllSounds()
     for _, obj in ipairs(Workspace:GetDescendants()) do
         checkAndTrackSound(obj)
@@ -276,7 +281,6 @@ local function startSpam()
     end)
 end
 
--- ตรวจจับการกดค้าง
 HoldButton.MouseButton1Down:Connect(function()
     if not isHolding then
         isHolding = true
