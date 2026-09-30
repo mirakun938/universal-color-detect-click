@@ -1,11 +1,14 @@
 local Players = game:GetService("Players")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local Workspace = game:GetService("Workspace")
 local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
 local isHolding = false
-local isLocked = true -- ตั้งค่าเริ่มต้นให้ล็อคตำแหน่งไว้
-local spamSpeed = 0.02 -- ความเร็วในการสแปมคลิกซ้าย
+local isLocked = true -- ล็อคการลากปุ่มตั้งต้น
+local MAX_LOCK_DISTANCE = 100 -- ระยะสูงสุดในการตรวจจับ NPC (Studs)
 
 -- ลบ UI เก่าออกหากมีอยู่
 pcall(function()
@@ -25,11 +28,11 @@ ScreenGui.Name = "CenterLMBSpamGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
--- 1. ปุ่มสแปมหลัก (ตั้งไว้ตรงกลางหน้าจอ)
+-- 1. ปุ่มสแปมหลัก (ตรงกลางหน้าจอ)
 HoldButton.Name = "HoldSpamBtn"
 HoldButton.Parent = ScreenGui
 HoldButton.AnchorPoint = Vector2.new(0.5, 0.5)
-HoldButton.Position = UDim2.new(0.5, 0, 0.5, 0) -- พิกัดกึ่งกลางหน้าจอ
+HoldButton.Position = UDim2.new(0.5, 0, 0.5, 0)
 HoldButton.Size = UDim2.new(0, 90, 0, 90)
 HoldButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
 HoldButton.BackgroundTransparency = 0.3
@@ -47,7 +50,7 @@ HoldCorner.Parent = HoldButton
 LockButton.Name = "LockToggleBtn"
 LockButton.Parent = ScreenGui
 LockButton.AnchorPoint = Vector2.new(0.5, 0)
-LockButton.Position = UDim2.new(0.5, 0, 0.5, 55) -- วางไว้ใต้ปุ่มหลักเล็กน้อย
+LockButton.Position = UDim2.new(0.5, 0, 0.5, 55)
 LockButton.Size = UDim2.new(0, 70, 0, 25)
 LockButton.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
 LockButton.BackgroundTransparency = 0.2
@@ -60,7 +63,7 @@ LockButton.Active = true
 LockCorner.CornerRadius = UDim.new(0, 6)
 LockCorner.Parent = LockButton
 
--- ฟังก์ชันสลับสถานะ ล็อค/ปลดล็อก
+-- สลับสถานะ ล็อค/ปลดล็อก
 LockButton.MouseButton1Click:Connect(function()
     isLocked = not isLocked
     HoldButton.Draggable = not isLocked
@@ -74,9 +77,58 @@ LockButton.MouseButton1Click:Connect(function()
     end
 end)
 
+-- ฟังก์ชันค้นหา NPC หรือศัตรูที่ใกล้ที่สุด
+local function getNearestNPC()
+    local char = LocalPlayer.Character
+    if not char then return nil end
+    local myRoot = char:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return nil end
+
+    local closestTarget = nil
+    local shortestDistance = MAX_LOCK_DISTANCE
+
+    -- ตรวจหา NPC ใน Workspace (ค้นหาจาก Folder npcs หรือ Model ที่มี Humanoid)
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("Humanoid") and obj.Parent ~= char and obj.Health > 0 then
+            local targetChar = obj.Parent
+            local targetRoot = targetChar:FindFirstChild("HumanoidRootPart") or targetChar:FindFirstChildWhichIsA("BasePart")
+            
+            -- ตรวจสอบว่าไม่ใช่ Player คนอื่น
+            local isOtherPlayer = Players:GetPlayerFromCharacter(targetChar)
+            if targetRoot and not isOtherPlayer then
+                local dist = (targetRoot.Position - myRoot.Position).Magnitude
+                if dist < shortestDistance then
+                    shortestDistance = dist
+                    closestTarget = targetRoot
+                end
+            end
+        end
+    end
+    return closestTarget
+end
+
+-- ฟังก์ชันหันมุมกล้องและตัวละครไปที่เป้าหมาย
+local function lookAtTarget(targetPart)
+    local char = LocalPlayer.Character
+    if not char then return end
+    local myRoot = char:FindFirstChild("HumanoidRootPart")
+    
+    if myRoot and targetPart then
+        local targetPos = targetPart.Position
+        
+        -- 1. หมุนตัวละครให้หันไปหา NPC
+        myRoot.CFrame = CFrame.new(myRoot.Position, Vector3.new(targetPos.X, myRoot.Position.Y, targetPos.Z))
+        
+        -- 2. หมุนมุมกล้องให้มองไปที่ NPC
+        if Camera then
+            Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetPos)
+        end
+    end
+end
+
 -- ฟังก์ชันจำลองการคลิกเมาส์ซ้าย (LMB Click)
 local function clickLMB()
-    local viewportSize = workspace.CurrentCamera.ViewportSize
+    local viewportSize = Camera.ViewportSize
     local centerX = viewportSize.X / 2
     local centerY = viewportSize.Y / 2
 
@@ -85,12 +137,17 @@ local function clickLMB()
     VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
 end
 
--- ลูปสแปม LMB
+-- ลูปสแปม LMB + Auto Look At
 local function startSpam()
     task.spawn(function()
         while isHolding do
+            local nearestNPC = getNearestNPC()
+            if nearestNPC then
+                lookAtTarget(nearestNPC)
+            end
+            
             clickLMB()
-            task.wait(spamSpeed)
+            task.wait() -- รอน้อยที่สุดตาม Frame Rate (ไม่ค้าง)
         end
     end)
 end
