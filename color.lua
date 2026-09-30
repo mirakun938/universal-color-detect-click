@@ -7,27 +7,28 @@ local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
 -- ตั้งค่าระบบ
-local TELEPORT_THRESHOLD = 5 -- ระยะการขยับขั้นต่ำที่นับว่าเป็น Teleport (Studs)
-local LOCK_DURATION = 0.5    -- ระยะเวลาล็อคมอง NPC (วินาที)
-local MAX_DETECTION_DIST = 150 -- ระยะตรวจจับ NPC รอบตัว
+local TELEPORT_THRESHOLD = 5  -- ระยะการขยับที่นับว่าวาร์ป (Studs)
+local LOCK_DURATION = 0.5     -- ระยะเวลาล็อคมอง (วินาที)
+local CHECK_INTERVAL = 0.05   -- ความหน่วงเวลาเช็กตำแหน่ง (ช่วยลดอาการกระตุก)
 
-local lastPositions = {}
+local lastPosition = nil
 local isLocking = false
 local lockEndTime = 0
 local currentTargetRoot = nil
+local lastCheckTime = 0
 
--- ลบ UI เก่าออกหากมีอยู่
+-- ลบ UI เก่าออก
 pcall(function()
-    local oldGui = (gethui and gethui():FindFirstChild("TeleportTrackerGui")) or CoreGui:FindFirstChild("TeleportTrackerGui")
+    local oldGui = (gethui and gethui():FindFirstChild("BossTeleportTrackerGui")) or CoreGui:FindFirstChild("BossTeleportTrackerGui")
     if oldGui then oldGui:Destroy() end
 end)
 
--- สร้าง UI แสดงสถานะแจ้งเตือน
+-- UI แสดงสถานะ
 local ScreenGui = Instance.new("ScreenGui")
 local StatusLabel = Instance.new("TextLabel")
 local UICorner = Instance.new("UICorner")
 
-ScreenGui.Name = "TeleportTrackerGui"
+ScreenGui.Name = "BossTeleportTrackerGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
@@ -35,43 +36,40 @@ StatusLabel.Name = "StatusLabel"
 StatusLabel.Parent = ScreenGui
 StatusLabel.AnchorPoint = Vector2.new(0.5, 0)
 StatusLabel.Position = UDim2.new(0.5, 0, 0.1, 0)
-StatusLabel.Size = UDim2.new(0, 220, 0, 40)
+StatusLabel.Size = UDim2.new(0, 250, 0, 40)
 StatusLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 StatusLabel.BackgroundTransparency = 0.3
-StatusLabel.Text = "👁️ Teleport Tracker: READY"
-StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
+StatusLabel.Text = "🔍 WAITING FOR BOSS (AI)..."
+StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
 StatusLabel.TextSize = 14
 StatusLabel.Font = Enum.Font.SourceSansBold
 
 UICorner.CornerRadius = UDim.new(0, 8)
 UICorner.Parent = StatusLabel
 
--- ฟังก์ชันค้นหา NPC ทั้งหมดในระยะ
-local function getNearbyNPCs()
-    local npcs = {}
-    local char = LocalPlayer.Character
-    if not char then return npcs end
-    local myRoot = char:FindFirstChild("HumanoidRootPart")
-    if not myRoot then return npcs end
+-- ฟังก์ชันดึงตัว RootPart ของบอส/NPC ในโฟลเดอร์ Workspace.Misc.AI
+local function getBossRoot()
+    local miscFolder = Workspace:FindFirstChild("Misc")
+    if not miscFolder then return nil end
+    local aiFolder = miscFolder:FindFirstChild("AI")
+    if not aiFolder then return nil end
 
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if obj:IsA("Humanoid") and obj.Parent ~= char and obj.Health > 0 then
-            local targetChar = obj.Parent
-            local targetRoot = targetChar:FindFirstChild("HumanoidRootPart") or targetChar:FindFirstChildWhichIsA("BasePart")
-            
-            local isOtherPlayer = Players:GetPlayerFromCharacter(targetChar)
-            if targetRoot and not isOtherPlayer then
-                local dist = (targetRoot.Position - myRoot.Position).Magnitude
-                if dist <= MAX_DETECTION_DIST then
-                    table.insert(npcs, targetRoot)
+    -- ค้นหาบอส/NPC ตัวแรกที่อยู่ในโฟลเดอร์ AI
+    for _, child in ipairs(aiFolder:GetChildren()) do
+        if child:IsA("Model") then
+            local hum = child:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                local root = child:FindFirstChild("HumanoidRootPart") or child:FindFirstChildWhichIsA("BasePart")
+                if root then
+                    return root, child.Name
                 end
             end
         end
     end
-    return npcs
+    return nil, nil
 end
 
--- ฟังก์ชันหมุนกล้องและตัวละครไปหาเป้าหมาย
+-- ฟังก์ชันหมุนกล้องและตัวละคร
 local function faceTarget(targetRoot)
     local char = LocalPlayer.Character
     if not char then return end
@@ -89,47 +87,55 @@ local function faceTarget(targetRoot)
     end
 end
 
--- ลูปตรวจจับการ Teleport และจัดการการมอง (RenderStepped)
+-- ลูปตรวจจับการวาร์ป
 RunService.RenderStepped:Connect(function()
     local currentTime = tick()
-    local currentNPCs = getNearbyNPCs()
-    local currentFramePositions = {}
-
-    for _, root in ipairs(currentNPCs) do
-        local instanceId = root:GetDebugId()
-        local currentPos = root.Position
-        currentFramePositions[instanceId] = currentPos
-
-        -- ตรวจสอบว่ามีตำแหน่งเก่าเก็บไว้หรือไม่
-        if lastPositions[instanceId] then
-            local previousPos = lastPositions[instanceId]
-            local movedDistance = (currentPos - previousPos).Magnitude
-
-            -- ตรวจจับว่าตำแหน่งเปลี่ยนกะทันหันเกินค่า Threshold (การ Teleport)
-            if movedDistance >= TELEPORT_THRESHOLD then
-                isLocking = true
-                lockEndTime = currentTime + LOCK_DURATION
-                currentTargetRoot = root
+    
+    -- หน่วงรอบการเช็กพิกัดเพื่อประหยัดสเปกเครื่อง
+    if currentTime - lastCheckTime >= CHECK_INTERVAL then
+        lastCheckTime = currentTime
+        
+        local bossRoot, bossName = getBossRoot()
+        
+        if bossRoot then
+            local currentPos = bossRoot.Position
+            
+            if lastPosition then
+                local movedDistance = (currentPos - lastPosition).Magnitude
                 
-                -- อัปเดต UI แจ้งเตือน
-                StatusLabel.Text = "⚠️ TELEPORT DETECTED!"
-                StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+                -- ถ้าขยับเกิน Threshold = วาร์ป
+                if movedDistance >= TELEPORT_THRESHOLD then
+                    isLocking = true
+                    lockEndTime = currentTime + LOCK_DURATION
+                    currentTargetRoot = bossRoot
+                    
+                    StatusLabel.Text = "⚠️️ " .. bossName:upper() .. " TELEPORTED!"
+                    StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+                end
+            end
+            
+            lastPosition = currentPos
+            
+            if not isLocking then
+                StatusLabel.Text = "🎯 TRACKING: " .. bossName:upper()
+                StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
+            end
+        else
+            lastPosition = nil
+            if not isLocking then
+                StatusLabel.Text = "🔍 WAITING FOR BOSS (AI)..."
+                StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
             end
         end
     end
 
-    -- บันทึกตำแหน่งล่าสุดไว้เปรียบเทียบในเฟรมถัดไป
-    lastPositions = currentFramePositions
-
-    -- หากอยู่ในช่วงเวลา ล็อคมอง 0.5 วินาที
+    -- ล็อคมองบอส 0.5 วินาที
     if isLocking then
         if currentTime < lockEndTime and currentTargetRoot and currentTargetRoot.Parent then
             faceTarget(currentTargetRoot)
         else
             isLocking = false
             currentTargetRoot = nil
-            StatusLabel.Text = "👁️ Teleport Tracker: READY"
-            StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
         end
     end
 end)
