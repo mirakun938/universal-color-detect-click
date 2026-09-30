@@ -15,10 +15,12 @@ local isHolding = false
 local isLocked = true
 local isPausedByAnim = false
 local pauseEndTime = 0
+local animConnection = nil
+local currentBossHum = nil
 
 -- ลบ UI เก่าออก
 pcall(function()
-    local oldGui = (gethui and gethui():FindFirstChild("LMBSpamPureGui")) or CoreGui:FindFirstChild("LMBSpamPureGui")
+    local oldGui = (gethui and gethui():FindFirstChild("LMBSpamFastGui")) or CoreGui:FindFirstChild("LMBSpamFastGui")
     if oldGui then oldGui:Destroy() end
 end)
 
@@ -33,11 +35,11 @@ local LockCorner = Instance.new("UICorner")
 local StatusLabel = Instance.new("TextLabel")
 local StatusCorner = Instance.new("UICorner")
 
-ScreenGui.Name = "LMBSpamPureGui"
+ScreenGui.Name = "LMBSpamFastGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
--- 1. ปุ่มสแปมหลัก (ตรงกลางหน้าจอ)
+-- 1. ปุ่มสแปมหลัก
 HoldButton.Name = "HoldSpamBtn"
 HoldButton.Parent = ScreenGui
 HoldButton.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -55,7 +57,7 @@ HoldButton.Draggable = not isLocked
 HoldCorner.CornerRadius = UDim.new(0, 45)
 HoldCorner.Parent = HoldButton
 
--- 2. ปุ่มเล็กสำหรับ ล็อค/ปลดล็อก การลาก
+-- 2. ปุ่ม ล็อค/ปลดล็อก
 LockButton.Name = "LockToggleBtn"
 LockButton.Parent = ScreenGui
 LockButton.AnchorPoint = Vector2.new(0.5, 0)
@@ -119,21 +121,33 @@ local function getBossHumanoid()
     return nil
 end
 
--- เช็กว่าบอสเล่น Animation 75098348371396 หรือไม่
-local function isBossPlayingAnim(hum)
-    if not hum then return false end
-    
-    local animator = hum:FindFirstChildOfClass("Animator") or hum
-    local playingTracks = animator:GetPlayingAnimationTracks()
+-- สั่งหยุดสแปมทันทีเมื่อตรวจพบ Animation
+local function triggerInstantPause()
+    isPausedByAnim = true
+    pauseEndTime = tick() + PAUSE_DURATION
+    StatusLabel.Text = "🛑 ANIM DETECTED! PAUSED (1s)"
+    StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+    HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+end
 
-    for _, track in ipairs(playingTracks) do
-        if track.Animation and track.Animation.AnimationId then
-            if track.Animation.AnimationId:find(TARGET_ANIM_ID) then
-                return true
+-- ติดตั้ง Event Listener ตรวจจับ Animation Real-time
+local function setupAnimationTracker()
+    local bossHum = getBossHumanoid()
+    if bossHum and bossHum ~= currentBossHum then
+        currentBossHum = bossHum
+        if animConnection then animConnection:Disconnect() end
+        
+        local animator = bossHum:FindFirstChildOfClass("Animator") or bossHum
+        
+        -- ดักจับจังหวะที่ Animation เริ่มเล่นแบบเรียลไทม์ (Instant Event)
+        animConnection = animator.AnimationPlayed:Connect(function(track)
+            if track.Animation and track.Animation.AnimationId then
+                if track.Animation.AnimationId:find(TARGET_ANIM_ID) then
+                    triggerInstantPause()
+                end
             end
-        end
+        end)
     end
-    return false
 end
 
 -- จำลองการคลิกเมาส์ซ้าย (LMB)
@@ -147,33 +161,25 @@ local function clickLMB()
     VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
 end
 
--- ลูปสแปม LMB + เช็ก Animation เพื่อหยุดชั่วคราว
+-- ลูปสแปม LMB
 local function startSpam()
     task.spawn(function()
         while isHolding do
             local currentTime = tick()
-            local bossHum = getBossHumanoid()
+            
+            -- อัปเดตการดักจับ Event ของบอสเผื่อบอสเกิดใหม่
+            setupAnimationTracker()
 
-            -- 1. ตรวจจับ Animation
-            if bossHum and isBossPlayingAnim(bossHum) then
-                isPausedByAnim = true
-                pauseEndTime = currentTime + PAUSE_DURATION
-            end
-
-            -- 2. จัดการการหยุดสแปม 1 วินาที
+            -- ตรวจสอบว่าหมดช่วงเวลาพัก 1 วินาทีหรือยัง
             if isPausedByAnim then
-                if currentTime < pauseEndTime then
-                    StatusLabel.Text = "🛑 ANIM DETECTED! PAUSED (1s)"
-                    StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
-                    HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
-                else
+                if currentTime >= pauseEndTime then
                     isPausedByAnim = false
                 end
             end
 
-            -- 3. ยิงสแปมเมื่อไม่ติดสถานะพัก
+            -- ถ้าระบบไม่ได้ติดสั่งหยุด ให้สแปมคลิก
             if not isPausedByAnim then
-                StatusLabel.Text = "⚔️ SPAMMING ATTACK..."
+                StatusLabel.Text = "⚔️️ SPAMMING ATTACK..."
                 StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
                 HoldButton.BackgroundColor3 = Color3.fromRGB(50, 220, 50)
                 
@@ -189,6 +195,7 @@ end
 HoldButton.MouseButton1Down:Connect(function()
     if not isHolding then
         isHolding = true
+        setupAnimationTracker()
         startSpam()
     end
 end)
