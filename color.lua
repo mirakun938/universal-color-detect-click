@@ -1,163 +1,208 @@
 local Players = game:GetService("Players")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 local Workspace = game:GetService("Workspace")
-local RunService = game:GetService("RunService")
 local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
 -- ตั้งค่าระบบ
-local MIN_TELEPORT_DIST = 6.0   -- ระยะขยับที่นับว่าวาร์ป
-local LOCK_DURATION = 0.5       -- ระยะเวลาตั้งต้นในการมอง
-local CHECK_INTERVAL = 0.04     -- ปรับความถี่เช็กพิกัดให้ปลอดภัยจาก Anti-Cheat (ป้องกันหลุด)
+local TARGET_ANIM_ID = "75098348371396" -- ID Animation วาร์ป/อมตะ
+local SPAM_SPEED = 0.03                  -- ความเร็วในการสแปมคลิก
+local PAUSE_DURATION = 1.0               -- ระยะเวลาพักการสแปม (วินาที)
 
-local lastPosition = nil
-local isLocking = false
-local lockEndTime = 0
-local currentTargetRoot = nil
-local lastCheckTime = 0
-local lastFaceTime = 0
-
-local myChar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local myRoot = myChar:WaitForChild("HumanoidRootPart", 5)
-
--- อัปเดตเมื่อเกิดใหม่
-LocalPlayer.CharacterAdded:Connect(function(newChar)
-    myChar = newChar
-    myRoot = newChar:WaitForChild("HumanoidRootPart", 5)
-    Camera = Workspace.CurrentCamera
-    lastPosition = nil
-    isLocking = false
-    currentTargetRoot = nil
-end)
+local isHolding = false
+local isLocked = true
+local isPausedByAnim = false
+local pauseEndTime = 0
 
 -- ลบ UI เก่าออก
 pcall(function()
-    local oldGui = (gethui and gethui():FindFirstChild("BossTrackerSafeGui")) or CoreGui:FindFirstChild("BossTrackerSafeGui")
+    local oldGui = (gethui and gethui():FindFirstChild("LMBSpamPureGui")) or CoreGui:FindFirstChild("LMBSpamPureGui")
     if oldGui then oldGui:Destroy() end
 end)
 
--- สร้าง UI แสดงสถานะ
+-- UI แสดงสถานะและปุ่มกด
 local ScreenGui = Instance.new("ScreenGui")
-local StatusLabel = Instance.new("TextLabel")
-local UICorner = Instance.new("UICorner")
+local HoldButton = Instance.new("TextButton")
+local HoldCorner = Instance.new("UICorner")
 
-ScreenGui.Name = "BossTrackerSafeGui"
+local LockButton = Instance.new("TextButton")
+local LockCorner = Instance.new("UICorner")
+
+local StatusLabel = Instance.new("TextLabel")
+local StatusCorner = Instance.new("UICorner")
+
+ScreenGui.Name = "LMBSpamPureGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
+-- 1. ปุ่มสแปมหลัก (ตรงกลางหน้าจอ)
+HoldButton.Name = "HoldSpamBtn"
+HoldButton.Parent = ScreenGui
+HoldButton.AnchorPoint = Vector2.new(0.5, 0.5)
+HoldButton.Position = UDim2.new(0.5, 0, 0.5, 0)
+HoldButton.Size = UDim2.new(0, 90, 0, 90)
+HoldButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
+HoldButton.BackgroundTransparency = 0.3
+HoldButton.Text = "HOLD TO\nSPAM LMB"
+HoldButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+HoldButton.TextSize = 14
+HoldButton.Font = Enum.Font.SourceSansBold
+HoldButton.Active = true
+HoldButton.Draggable = not isLocked
+
+HoldCorner.CornerRadius = UDim.new(0, 45)
+HoldCorner.Parent = HoldButton
+
+-- 2. ปุ่มเล็กสำหรับ ล็อค/ปลดล็อก การลาก
+LockButton.Name = "LockToggleBtn"
+LockButton.Parent = ScreenGui
+LockButton.AnchorPoint = Vector2.new(0.5, 0)
+LockButton.Position = UDim2.new(0.5, 0, 0.5, 55)
+LockButton.Size = UDim2.new(0, 70, 0, 25)
+LockButton.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+LockButton.BackgroundTransparency = 0.2
+LockButton.Text = "🔒 Lock"
+LockButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+LockButton.TextSize = 12
+LockButton.Font = Enum.Font.SourceSansBold
+LockButton.Active = true
+
+LockCorner.CornerRadius = UDim.new(0, 6)
+LockCorner.Parent = LockButton
+
+LockButton.MouseButton1Click:Connect(function()
+    isLocked = not isLocked
+    HoldButton.Draggable = not isLocked
+    
+    if isLocked then
+        LockButton.Text = "🔒 Lock"
+        LockButton.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    else
+        LockButton.Text = "🔓 Unlock"
+        LockButton.BackgroundColor3 = Color3.fromRGB(200, 120, 0)
+    end
+end)
+
+-- 3. แถบแสดงสถานะ
 StatusLabel.Name = "StatusLabel"
 StatusLabel.Parent = ScreenGui
 StatusLabel.AnchorPoint = Vector2.new(0.5, 0)
 StatusLabel.Position = UDim2.new(0.5, 0, 0.1, 0)
-StatusLabel.Size = UDim2.new(0, 260, 0, 40)
+StatusLabel.Size = UDim2.new(0, 260, 0, 35)
 StatusLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 StatusLabel.BackgroundTransparency = 0.3
-StatusLabel.Text = "🔍 WAITING FOR BOSS..."
-StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
-StatusLabel.TextSize = 14
+StatusLabel.Text = "🛡️ SYSTEM READY"
+StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
+StatusLabel.TextSize = 13
 StatusLabel.Font = Enum.Font.SourceSansBold
 
-UICorner.CornerRadius = UDim.new(0, 8)
-UICorner.Parent = StatusLabel
+StatusCorner.CornerRadius = UDim.new(0, 8)
+StatusCorner.Parent = StatusLabel
 
 -- ค้นหาบอสใน Workspace.Misc.AI
-local function getBossRoot()
+local function getBossHumanoid()
     local miscFolder = Workspace:FindFirstChild("Misc")
-    if not miscFolder then return nil, nil end
+    if not miscFolder then return nil end
     local aiFolder = miscFolder:FindFirstChild("AI")
-    if not aiFolder then return nil, nil end
+    if not aiFolder then return nil end
 
     for _, child in ipairs(aiFolder:GetChildren()) do
         if child:IsA("Model") then
             local hum = child:FindFirstChildOfClass("Humanoid")
             if hum and hum.Health > 0 then
-                local root = child:FindFirstChild("HumanoidRootPart") or child:FindFirstChildWhichIsA("BasePart")
-                if root then
-                    return root, child.Name
-                end
+                return hum
             end
         end
     end
-    return nil, nil
+    return nil
 end
 
--- ฟังก์ชันหมุนมุมมองที่เสถียรและไม่โดน Anti-Cheat เตะ
-local function safeFaceTarget(targetRoot)
-    if not myRoot or not myRoot.Parent or not targetRoot or not targetRoot.Parent then return end
+-- เช็กว่าบอสเล่น Animation 75098348371396 หรือไม่
+local function isBossPlayingAnim(hum)
+    if not hum then return false end
     
-    local targetPos = targetRoot.Position
-    local currentCam = Workspace.CurrentCamera or Camera
-    
-    -- 1. หมุนตัวละครไปหาทิศทางของบอส
-    myRoot.CFrame = CFrame.lookAt(myRoot.Position, Vector3.new(targetPos.X, myRoot.Position.Y, targetPos.Z))
-    
-    -- 2. หมุนกล้องตามทันที
-    if currentCam then
-        currentCam.CFrame = CFrame.lookAt(currentCam.CFrame.Position, targetPos)
-    end
-end
+    local animator = hum:FindFirstChildOfClass("Animator") or hum
+    local playingTracks = animator:GetPlayingAnimationTracks()
 
--- ลูปการทำงานหลัก
-RunService.Heartbeat:Connect(function()
-    local currentTime = tick()
-    
-    if not myRoot or not myRoot.Parent then
-        if LocalPlayer.Character then
-            myRoot = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    for _, track in ipairs(playingTracks) do
+        if track.Animation and track.Animation.AnimationId then
+            if track.Animation.AnimationId:find(TARGET_ANIM_ID) then
+                return true
+            end
         end
     end
+    return false
+end
 
-    -- ตรวจสอบพิกัดตามรอบ CHECK_INTERVAL
-    if currentTime - lastCheckTime >= CHECK_INTERVAL then
-        lastCheckTime = currentTime
-        
-        local bossRoot, bossName = getBossRoot()
-        
-        if bossRoot then
-            local currentPos = bossRoot.Position
-            
-            if lastPosition then
-                local movedDistance = (currentPos - lastPosition).Magnitude
-                
-                -- ตรวจจับการวาร์ป
-                if movedDistance >= MIN_TELEPORT_DIST then
-                    -- อัปเดตเป้าหมายใหม่ทันที และรีเซ็ตเวลาล็อค 0.5 วินาทีใหม่รองรับการวาร์ปรัวๆ ช่วงโกรธ
-                    isLocking = true
-                    lockEndTime = currentTime + LOCK_DURATION
-                    currentTargetRoot = bossRoot
-                    
-                    StatusLabel.Text = "⚡ " .. bossName:upper() .. " TELEPORTED!"
+-- จำลองการคลิกเมาส์ซ้าย (LMB)
+local function clickLMB()
+    local viewportSize = Camera.ViewportSize
+    local centerX = viewportSize.X / 2
+    local centerY = viewportSize.Y / 2
+
+    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
+    task.wait(0.01)
+    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
+end
+
+-- ลูปสแปม LMB + เช็ก Animation เพื่อหยุดชั่วคราว
+local function startSpam()
+    task.spawn(function()
+        while isHolding do
+            local currentTime = tick()
+            local bossHum = getBossHumanoid()
+
+            -- 1. ตรวจจับ Animation
+            if bossHum and isBossPlayingAnim(bossHum) then
+                isPausedByAnim = true
+                pauseEndTime = currentTime + PAUSE_DURATION
+            end
+
+            -- 2. จัดการการหยุดสแปม 1 วินาที
+            if isPausedByAnim then
+                if currentTime < pauseEndTime then
+                    StatusLabel.Text = "🛑 ANIM DETECTED! PAUSED (1s)"
                     StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+                    HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+                else
+                    isPausedByAnim = false
                 end
             end
-            
-            lastPosition = currentPos
-            
-            if not isLocking then
-                StatusLabel.Text = "🎯 TRACKING: " .. bossName:upper()
-                StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
-            end
-        else
-            lastPosition = nil
-            if not isLocking then
-                StatusLabel.Text = "🔍 WAITING FOR BOSS..."
-                StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
-            end
-        end
-    end
 
-    -- หันมองบอสเมื่ออยู่ในสถานะล็อค
-    if isLocking then
-        if currentTime < lockEndTime and currentTargetRoot and currentTargetRoot.Parent then
-            -- ป้องกันการส่ง Packet หมุนกล้องถี่เกินไปจนหลุดออกจากเกม (จำกัดให้หมุนทุกๆ 0.02 วินาที)
-            if currentTime - lastFaceTime >= 0.02 then
-                lastFaceTime = currentTime
-                safeFaceTarget(currentTargetRoot)
+            -- 3. ยิงสแปมเมื่อไม่ติดสถานะพัก
+            if not isPausedByAnim then
+                StatusLabel.Text = "⚔️ SPAMMING ATTACK..."
+                StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
+                HoldButton.BackgroundColor3 = Color3.fromRGB(50, 220, 50)
+                
+                clickLMB()
             end
-        else
-            isLocking = false
-            currentTargetRoot = nil
+
+            task.wait(SPAM_SPEED)
         end
+    end)
+end
+
+-- ตรวจจับการกดค้าง
+HoldButton.MouseButton1Down:Connect(function()
+    if not isHolding then
+        isHolding = true
+        startSpam()
     end
+end)
+
+HoldButton.MouseButton1Up:Connect(function()
+    isHolding = false
+    HoldButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
+    StatusLabel.Text = "🛡️ SYSTEM READY"
+    StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
+end)
+
+HoldButton.MouseLeave:Connect(function()
+    isHolding = false
+    HoldButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
+    StatusLabel.Text = "🛡️ SYSTEM READY"
+    StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
 end)
