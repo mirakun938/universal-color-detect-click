@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
 local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
@@ -10,17 +11,19 @@ local Camera = Workspace.CurrentCamera
 local TARGET_ANIM_ID = "75098348371396" -- ID Animation วาร์ป/อมตะ
 local SPAM_SPEED = 0.03                  -- ความเร็วในการสแปมคลิก
 local PAUSE_DURATION = 1.0               -- ระยะเวลาพักการสแปม (วินาที)
+local TELEPORT_THRESHOLD = 6.0           -- ระยะขยับกะทันหันที่นับว่าวาร์ป (กัน Endlag กระตุกสั้นๆ)
 
 local isHolding = false
 local isLocked = true
-local isPausedByAnim = false
 local pauseEndTime = 0
-local animConnection = nil
+
 local currentBossHum = nil
+local lastBossPos = nil
+local animConnection = nil
 
 -- ลบ UI เก่าออก
 pcall(function()
-    local oldGui = (gethui and gethui():FindFirstChild("LMBSpamFastGui")) or CoreGui:FindFirstChild("LMBSpamFastGui")
+    local oldGui = (gethui and gethui():FindFirstChild("LMBSpamUltraGui")) or CoreGui:FindFirstChild("LMBSpamUltraGui")
     if oldGui then oldGui:Destroy() end
 end)
 
@@ -35,7 +38,7 @@ local LockCorner = Instance.new("UICorner")
 local StatusLabel = Instance.new("TextLabel")
 local StatusCorner = Instance.new("UICorner")
 
-ScreenGui.Name = "LMBSpamFastGui"
+ScreenGui.Name = "LMBSpamUltraGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
@@ -104,51 +107,80 @@ StatusCorner.CornerRadius = UDim.new(0, 8)
 StatusCorner.Parent = StatusLabel
 
 -- ค้นหาบอสใน Workspace.Misc.AI
-local function getBossHumanoid()
+local function getBossInfo()
     local miscFolder = Workspace:FindFirstChild("Misc")
-    if not miscFolder then return nil end
+    if not miscFolder then return nil, nil end
     local aiFolder = miscFolder:FindFirstChild("AI")
-    if not aiFolder then return nil end
+    if not aiFolder then return nil, nil end
 
     for _, child in ipairs(aiFolder:GetChildren()) do
         if child:IsA("Model") then
             local hum = child:FindFirstChildOfClass("Humanoid")
-            if hum and hum.Health > 0 then
-                return hum
+            local root = child:FindFirstChild("HumanoidRootPart") or child:FindFirstChildWhichIsA("BasePart")
+            if hum and hum.Health > 0 and root then
+                return hum, root
             end
         end
     end
-    return nil
+    return nil, nil
 end
 
--- สั่งหยุดสแปมทันทีเมื่อตรวจพบ Animation
-local function triggerInstantPause()
-    isPausedByAnim = true
+-- สั่ง Trigger Pause 1 วินาที
+local function triggerPause(reasonText)
     pauseEndTime = tick() + PAUSE_DURATION
-    StatusLabel.Text = "🛑 ANIM DETECTED! PAUSED (1s)"
+    StatusLabel.Text = "🛑 " .. reasonText .. " (1s)"
     StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
-    HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+    if isHolding then
+        HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+    end
 end
 
--- ติดตั้ง Event Listener ตรวจจับ Animation Real-time
-local function setupAnimationTracker()
-    local bossHum = getBossHumanoid()
+-- ระบบตรวจจับ Animation ตลอดเวลา (Background Listener)
+local function updateAnimationTracker(bossHum)
     if bossHum and bossHum ~= currentBossHum then
         currentBossHum = bossHum
         if animConnection then animConnection:Disconnect() end
         
         local animator = bossHum:FindFirstChildOfClass("Animator") or bossHum
         
-        -- ดักจับจังหวะที่ Animation เริ่มเล่นแบบเรียลไทม์ (Instant Event)
         animConnection = animator.AnimationPlayed:Connect(function(track)
             if track.Animation and track.Animation.AnimationId then
                 if track.Animation.AnimationId:find(TARGET_ANIM_ID) then
-                    triggerInstantPause()
+                    triggerPause("ANIM DETECTED!")
                 end
             end
         end)
     end
 end
+
+-- ลูปตรวจจับตำแหน่งวาร์ปสำรอง + รัน Tracker ตลอดเวลา (Heartbeat)
+RunService.Heartbeat:Connect(function()
+    local bossHum, bossRoot = getBossInfo()
+    
+    if bossHum and bossRoot then
+        -- 1. ผูก Event ตรวจ Animation ตลอดเวลา (ไม่ว่าจะกดปุ่มอยู่หรือไม่)
+        updateAnimationTracker(bossHum)
+        
+        -- 2. ระบบตรวจการ Teleport สำรอง (กรณีไม่เล่น Animation)
+        local currentPos = bossRoot.Position
+        if lastBossPos then
+            local movedDist = (currentPos - lastBossPos).Magnitude
+            if movedDist >= TELEPORT_THRESHOLD then
+                triggerPause("TELEPORT DETECTED!")
+            end
+        end
+        lastBossPos = currentPos
+    else
+        lastBossPos = nil
+        currentBossHum = nil
+    end
+
+    -- อัปเดต UI เมื่อไม่ได้กดปุ่มและหมดระยะเวลา Pause
+    if not isHolding and tick() >= pauseEndTime then
+        StatusLabel.Text = "🛡️ SYSTEM READY"
+        StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
+    end
+end)
 
 -- จำลองการคลิกเมาส์ซ้าย (LMB)
 local function clickLMB()
@@ -166,20 +198,12 @@ local function startSpam()
     task.spawn(function()
         while isHolding do
             local currentTime = tick()
-            
-            -- อัปเดตการดักจับ Event ของบอสเผื่อบอสเกิดใหม่
-            setupAnimationTracker()
 
-            -- ตรวจสอบว่าหมดช่วงเวลาพัก 1 วินาทีหรือยัง
-            if isPausedByAnim then
-                if currentTime >= pauseEndTime then
-                    isPausedByAnim = false
-                end
-            end
-
-            -- ถ้าระบบไม่ได้ติดสั่งหยุด ให้สแปมคลิก
-            if not isPausedByAnim then
-                StatusLabel.Text = "⚔️️ SPAMMING ATTACK..."
+            -- ถ้ายังไม่พ้นช่วง Pause สคริปต์จะไม่ยิงคลิก
+            if currentTime < pauseEndTime then
+                HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+            else
+                StatusLabel.Text = "⚔️ SPAMMING ATTACK..."
                 StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
                 HoldButton.BackgroundColor3 = Color3.fromRGB(50, 220, 50)
                 
@@ -195,7 +219,6 @@ end
 HoldButton.MouseButton1Down:Connect(function()
     if not isHolding then
         isHolding = true
-        setupAnimationTracker()
         startSpam()
     end
 end)
@@ -203,13 +226,9 @@ end)
 HoldButton.MouseButton1Up:Connect(function()
     isHolding = false
     HoldButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
-    StatusLabel.Text = "🛡️ SYSTEM READY"
-    StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
 end)
 
 HoldButton.MouseLeave:Connect(function()
     isHolding = false
     HoldButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
-    StatusLabel.Text = "🛡️ SYSTEM READY"
-    StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
 end)
