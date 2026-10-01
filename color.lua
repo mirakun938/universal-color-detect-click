@@ -12,8 +12,8 @@ local Camera = Workspace.CurrentCamera
 -- ตั้งค่าระบบ (CONFIG & MODES)
 --------------------------------------------------------------------------------
 local TARGET_SOUND_IDS = {
-    ["108688312097046"] = "Smoke_Teleport_Poof_4", --[span_0](start_span)[span_0](end_span)
-    ["108156925383225"] = "SidestepEnd"              --
+    ["108688312097046"] = "Smoke_Teleport_Poof_4",
+    ["108156925383225"] = "SidestepEnd"
 }
 
 local MODES = {
@@ -35,6 +35,7 @@ local FAR_DISTANCE = 15.0
 
 local BURST_COUNT_THRESHOLD = 3              -- จำนวนครั้งที่นับ
 local BURST_TIME_WINDOW = 0.6                -- กรอบเวลานับเสียงรัว (วินาที)
+local SOUND_DEBOUNCE_TIME = 0.10             -- ระยะเวลาคูลดาวน์กันนับเสียงเบิ้ล/เล่นพร้อมกัน (วินาที)
 local LOCK_DURATION = 0.5                    
 
 --------------------------------------------------------------------------------
@@ -45,6 +46,7 @@ local isLocked = true
 local pauseEndTime = 0
 local soundTimestamps = {}
 local trackedSounds = {}
+local lastSoundTriggerTime = 0               -- เก็บเวลาที่บันทึกเสียงล่าสุด (ใช้กันเบิ้ล)
 
 local isLockingLook = false
 local lockLookEndTime = 0
@@ -94,7 +96,7 @@ StatusLabel.Font = Enum.Font.SourceSansBold
 StatusCorner.CornerRadius = UDim.new(0, 8)
 StatusCorner.Parent = StatusLabel
 
--- 1.5 เพิ่มหลอดสะสมค่า Burst Progress Bar
+-- 1.5 หลอดสะสมค่า Burst Progress Bar
 local BurstBarBg = Instance.new("Frame")
 local BurstBarBgCorner = Instance.new("UICorner")
 local BurstBarFill = Instance.new("Frame")
@@ -115,7 +117,7 @@ BurstBarBgCorner.Parent = BurstBarBg
 BurstBarFill.Name = "BurstBarFill"
 BurstBarFill.Parent = BurstBarBg
 BurstBarFill.Position = UDim2.new(0, 0, 0, 0)
-BurstBarFill.Size = UDim2.new(0, 0, 1, 0) -- เริ่มต้น 0%
+BurstBarFill.Size = UDim2.new(0, 0, 1, 0)
 BurstBarFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
 
 BurstBarFillCorner.CornerRadius = UDim.new(0, 4)
@@ -130,7 +132,6 @@ BurstText.TextColor3 = Color3.fromRGB(255, 255, 255)
 BurstText.TextSize = 10
 BurstText.Font = Enum.Font.SourceSansBold
 
--- ฟังก์ชันอัปเดตหลอดสะสมค่า
 local function updateBurstBar(count)
     local percentage = math.clamp(count / BURST_COUNT_THRESHOLD, 0, 1)
     BurstBarFill:TweenSize(UDim2.new(percentage, 0, 1, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.1, true)
@@ -327,10 +328,17 @@ local function safeFaceTarget(targetRoot)
 end
 
 --------------------------------------------------------------------------------
--- ประมวลผลเมื่อตรวจพบเสียงวาร์ป (Sound Event Processor)
+-- ประมวลผลเมื่อตรวจพบเสียงวาร์ป (Sound Event Processor พร้อมระบบกันนับเบิ้ล)
 --------------------------------------------------------------------------------
 local function onSoundTriggered()
     local now = tick()
+    
+    -- === เพิ่มระบบ Debounce ป้องกันการนับเสียงเบิ้ลเมื่อเล่นพร้อมกัน ===
+    if now - lastSoundTriggerTime < SOUND_DEBOUNCE_TIME then
+        return -- ข้ามการทำงานหากเกิดขึ้นถี่เกินกว่า 0.1 วินาที
+    end
+    lastSoundTriggerTime = now
+
     local activeProfile = MODES[currentModeKey]
     
     -- === 1. Auto Look At ===
@@ -380,7 +388,7 @@ local function onSoundTriggered()
 
     pauseEndTime = now + duration
 
-    StatusLabel.Text = "👀 LOOK + ⚠️️ " .. distanceType .. " PAUSE (" .. string.format("%.1f", duration) .. "s)"
+    StatusLabel.Text = "👀 LOOK + ⚠️ " .. distanceType .. " PAUSE (" .. string.format("%.1f", duration) .. "s)"
     StatusLabel.TextColor3 = (distanceType == "FAR") and Color3.fromRGB(255, 50, 50) or Color3.fromRGB(255, 150, 0)
     
     if isHolding then
