@@ -11,11 +11,12 @@ local Camera = Workspace.CurrentCamera
 --------------------------------------------------------------------------------
 -- ตั้งค่าระบบ (CONFIG & MODES)
 --------------------------------------------------------------------------------
-local TARGET_SOUND_IDS = {
-    ["108688312097046"] = "Smoke_Teleport_Poof_4",
-    ["108156925383225"] = "SidestepEnd",
-    ["120714138513879"] = "Cursed energy",
-    ["105373583781618"] = "tk8_kick_hit"
+-- แยกประเภทของเสียง Sound ID
+local SOUND_TYPES = {
+    ["108688312097046"] = "TELEPORT", -- Smoke_Teleport_Poof_4
+    ["108156925383225"] = "TELEPORT", -- SidestepEnd
+    ["120714138513879"] = "TELEPORT", -- Cursed energy
+    ["105373583781618"] = "KICK_HIT"  -- tk8_kick_hit (ท่าเตะบอส)
 }
 
 local MODES = {
@@ -35,10 +36,13 @@ local currentModeKey = "Normal"
 local SPAM_SPEED = 0.03                       
 local FAR_DISTANCE = 15.0                     
 
+local KICK_HIT_PAUSE = 0.5                    -- ระยะเวลา Pause เมื่อโดนท่าเตะ (วินาที)
+
 local UNPAUSE_THRESHOLD = 2                  -- วาร์ป 2 ครั้ง = ยกเลิก Pause
-local PRESS_Q_THRESHOLD = 3                   -- วาร์ป 3 ครั้ง = กดปุ่ม Q 1 ที
+local PRESS_Q_THRESHOLD = 3                   -- วาร์ป 3 ครั้ง = กดปุ่ม Q + F สำรอง
+local Q_PAUSE_DURATION = 1.0                  -- พักการตี 1.0 วินาทีเมื่อ Burst 3
 local BURST_TIME_WINDOW = 0.6                -- กรอบเวลานับเสียงรัว (วินาที)
-local SOUND_DEBOUNCE_TIME = 0.10             -- ระยะเวลาคูลดาวน์กันนับเสียงเบิ้ล (วินาที)
+local SOUND_DEBOUNCE_TIME = 0.10             -- คูลดาวน์กันนับเสียงเบิ้ล (วินาที)
 local LOCK_DURATION = 0.5                    
 
 --------------------------------------------------------------------------------
@@ -49,7 +53,7 @@ local isLocked = true
 local pauseEndTime = 0
 local soundTimestamps = {}
 local trackedSounds = {}
-local lastSoundTriggerTime = 0
+local lastSoundTriggerTime = {}
 
 local isLockingLook = false
 local lockLookEndTime = 0
@@ -143,7 +147,7 @@ local function updateBurstBar(count)
         BurstText.Text = "⚡ BURST x2 (UNPAUSE)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
     elseif count >= 3 then
-        BurstText.Text = "💥 BURST x3 (PRESSED [Q] KEY!)"
+        BurstText.Text = "💥 BURST x3 (PRESSED [Q] + [F] BLOCK)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
     else
         BurstText.Text = "BURST COUNT: " .. count .. "/3"
@@ -269,9 +273,6 @@ CautiousModeBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
 CautiousModeBtn.Text = "🛡️ Cautious (Close 0.7s)"
 CautiousModeBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
 CautiousModeBtn.TextSize = 12
-CautiousModeBtn.Font = Enum.Font.SourceSansBold
-
-CautiousBtnCorner.CornerRadius = UDim.new(0, 6)
 CautiousBtnCorner.Parent = CautiousModeBtn
 
 MenuToggleButton.MouseButton1Click:Connect(function()
@@ -300,13 +301,18 @@ NormalModeBtn.MouseButton1Click:Connect(function() setCombatMode("Normal") end)
 CautiousModeBtn.MouseButton1Click:Connect(function() setCombatMode("Cautious") end)
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันจำลองการกดปุ่ม Q (เปลี่ยนจากปุ่ม F เป็น Q แล้ว)
+-- ฟังก์ชันจำลองการกดปุ่ม Q แล้วตามด้วย F (บล็อกสำรอง)
 --------------------------------------------------------------------------------
-local function pressKeyQ()
+local function pressEscapeCombo()
     task.spawn(function()
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Q, false, game)
         task.wait(0.05)
         VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Q, false, game)
+        
+        task.wait(0.12)
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+        task.wait(0.15)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
     end)
 end
 
@@ -345,20 +351,19 @@ local function safeFaceTarget(targetRoot)
 end
 
 --------------------------------------------------------------------------------
--- ประมวลผลเมื่อตรวจพบเสียงวาร์ป
+-- ประมวลผลเมื่อตรวจพบเสียง
 --------------------------------------------------------------------------------
-local function onSoundTriggered()
+local function onSoundTriggered(soundCategory)
     local now = tick()
     
-    -- === ระบบ Debounce ป้องกันการนับเสียงเบิ้ล ===
-    if now - lastSoundTriggerTime < SOUND_DEBOUNCE_TIME then
+    -- === 1. Debounce ป้องกันเสียงเบิ้ล ===
+    local lastTrigger = lastSoundTriggerTime[soundCategory] or 0
+    if now - lastTrigger < SOUND_DEBOUNCE_TIME then
         return 
     end
-    lastSoundTriggerTime = now
+    lastSoundTriggerTime[soundCategory] = now
 
-    local activeProfile = MODES[currentModeKey]
-    
-    -- === 1. Auto Look At ===
+    -- === 2. Auto Look At (ทำทั้งสองกรณี) ===
     local bossRoot, bossName = getBossRoot()
     if bossRoot then
         isLockingLook = true
@@ -366,7 +371,19 @@ local function onSoundTriggered()
         currentTargetRoot = bossRoot
     end
 
-    -- === 2. LMB Spam Pause / Burst ===
+    -- === กรณีที่ 1: เสียง KICK_HIT (ไม่นับ Burst / หยุดตีชั่วคราวอย่างเดียว) ===
+    if soundCategory == "KICK_HIT" then
+        pauseEndTime = now + KICK_HIT_PAUSE
+        
+        StatusLabel.Text = "🦶 KICK DETECTED! PAUSE (" .. string.format("%.1f", KICK_HIT_PAUSE) .. "s)"
+        StatusLabel.TextColor3 = Color3.fromRGB(255, 170, 0)
+        if isHolding then
+            HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+        end
+        return
+    end
+
+    -- === กรณีที่ 2: เสียง TELEPORT (คิดระบบ Burst + Q/F หลบ) ===
     table.insert(soundTimestamps, now)
     
     for i = #soundTimestamps, 1, -1 do
@@ -378,21 +395,21 @@ local function onSoundTriggered()
     local currentBurstCount = #soundTimestamps
     updateBurstBar(currentBurstCount)
 
-    -- เงื่อนไขที่ 1: วาร์ปรัวครบ 3 ครั้ง -> กดปุ่ม Q 1 ที + ยกเลิก Pause
+    -- เงื่อนไข: วาร์ปรัวครบ 3 ครั้ง -> กดปุ่ม Q + F + Pause 1.0 วินาที
     if currentBurstCount >= PRESS_Q_THRESHOLD then
-        pauseEndTime = 0
         soundTimestamps = {}
-        pressKeyQ() -- กดปุ่ม Q 1 ที
+        pressEscapeCombo()
+        pauseEndTime = now + Q_PAUSE_DURATION
         
-        StatusLabel.Text = "💥 BURST x3! PRESSED [Q] KEY & UNPAUSE!"
+        StatusLabel.Text = "💥 BURST x3! PRESSED [Q]+[F] & PAUSE 1.0s!"
         StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
         if isHolding then
-            HoldButton.BackgroundColor3 = Color3.fromRGB(50, 220, 50)
+            HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
         end
         return
     end
 
-    -- เงื่อนไขที่ 2: วาร์ปรัวครบ 2 ครั้ง -> ยกเลิก Pause ทันที
+    -- เงื่อนไข: วาร์ปรัวครบ 2 ครั้ง -> ยกเลิก Pause ทันที
     if currentBurstCount >= UNPAUSE_THRESHOLD then
         pauseEndTime = 0
         
@@ -405,6 +422,7 @@ local function onSoundTriggered()
     end
 
     -- วาร์ปปกติ (ครั้งแรก)
+    local activeProfile = MODES[currentModeKey]
     local duration = activeProfile.ClosePause
     local distanceType = "CLOSE"
 
@@ -433,16 +451,16 @@ local function checkAndTrackSound(inst)
     if inst:IsA("Sound") and not trackedSounds[inst] then
         local soundIdStr = tostring(inst.SoundId)
         
-        for targetId, _ in pairs(TARGET_SOUND_IDS) do
+        for targetId, category in pairs(SOUND_TYPES) do
             if soundIdStr:find(targetId) then
                 trackedSounds[inst] = true
                 
                 inst.Played:Connect(function()
-                    onSoundTriggered()
+                    onSoundTriggered(category)
                 end)
                 
                 if inst.IsPlaying then
-                    onSoundTriggered()
+                    onSoundTriggered(category)
                 end
                 break
             end
