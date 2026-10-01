@@ -15,7 +15,7 @@ local TARGET_SOUND_IDS = {
     ["108688312097046"] = "Smoke_Teleport_Poof_4",
     ["108156925383225"] = "SidestepEnd",
     ["120714138513879"] = "Cursed energy",
-    ["105373583781618"] = "tk8_kick_hit" -- [เพิ่ม ID สุดท้ายจากรูปแล้ว]
+    ["105373583781618"] = "tk8_kick_hit"
 }
 
 local MODES = {
@@ -36,7 +36,7 @@ local SPAM_SPEED = 0.03
 local FAR_DISTANCE = 15.0                     
 
 local UNPAUSE_THRESHOLD = 2                  -- วาร์ป 2 ครั้ง = ยกเลิก Pause
-local PRESS_F_THRESHOLD = 3                   -- วาร์ป 3 ครั้ง = กดปุ่ม F 1 ที
+local PRESS_Q_THRESHOLD = 3                   -- วาร์ป 3 ครั้ง = กดปุ่ม Q 1 ที
 local BURST_TIME_WINDOW = 0.6                -- กรอบเวลานับเสียงรัว (วินาที)
 local SOUND_DEBOUNCE_TIME = 0.10             -- ระยะเวลาคูลดาวน์กันนับเสียงเบิ้ล (วินาที)
 local LOCK_DURATION = 0.5                    
@@ -136,14 +136,14 @@ BurstText.TextSize = 10
 BurstText.Font = Enum.Font.SourceSansBold
 
 local function updateBurstBar(count)
-    local percentage = math.clamp(count / PRESS_F_THRESHOLD, 0, 1)
+    local percentage = math.clamp(count / PRESS_Q_THRESHOLD, 0, 1)
     BurstBarFill:TweenSize(UDim2.new(percentage, 0, 1, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.1, true)
     
     if count == 2 then
         BurstText.Text = "⚡ BURST x2 (UNPAUSE)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
     elseif count >= 3 then
-        BurstText.Text = "💥 BURST x3 (PRESSED [F] KEY!)"
+        BurstText.Text = "💥 BURST x3 (PRESSED [Q] KEY!)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
     else
         BurstText.Text = "BURST COUNT: " .. count .. "/3"
@@ -300,13 +300,13 @@ NormalModeBtn.MouseButton1Click:Connect(function() setCombatMode("Normal") end)
 CautiousModeBtn.MouseButton1Click:Connect(function() setCombatMode("Cautious") end)
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันจำลองการกดปุ่ม F
+-- ฟังก์ชันจำลองการกดปุ่ม Q (เปลี่ยนจากปุ่ม F เป็น Q แล้ว)
 --------------------------------------------------------------------------------
-local function pressKeyF()
+local function pressKeyQ()
     task.spawn(function()
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Q, false, game)
         task.wait(0.05)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Q, false, game)
     end)
 end
 
@@ -378,13 +378,13 @@ local function onSoundTriggered()
     local currentBurstCount = #soundTimestamps
     updateBurstBar(currentBurstCount)
 
-    -- เงื่อนไขที่ 1: วาร์ปรัวครบ 3 ครั้ง -> กดปุ่ม F 1 ที + ยกเลิก Pause
-    if currentBurstCount >= PRESS_F_THRESHOLD then
+    -- เงื่อนไขที่ 1: วาร์ปรัวครบ 3 ครั้ง -> กดปุ่ม Q 1 ที + ยกเลิก Pause
+    if currentBurstCount >= PRESS_Q_THRESHOLD then
         pauseEndTime = 0
         soundTimestamps = {}
-        pressKeyF()
+        pressKeyQ() -- กดปุ่ม Q 1 ที
         
-        StatusLabel.Text = "💥 BURST x3! PRESSED [F] KEY & UNPAUSE!"
+        StatusLabel.Text = "💥 BURST x3! PRESSED [Q] KEY & UNPAUSE!"
         StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
         if isHolding then
             HoldButton.BackgroundColor3 = Color3.fromRGB(50, 220, 50)
