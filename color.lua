@@ -11,10 +11,16 @@ local Camera = Workspace.CurrentCamera
 --------------------------------------------------------------------------------
 -- ตั้งค่าระบบ (CONFIG & MODES)
 --------------------------------------------------------------------------------
-local TARGET_SOUND_IDS = {
+-- 1. เสียง Teleport (นับ Burst / กด F)
+local TELEPORT_SOUND_IDS = {
     ["108688312097046"] = "Smoke_Teleport_Poof_4",
     ["108156925383225"] = "SidestepEnd",
-    ["120714138513879"] = "Cursed energy" -- [เพิ่ม ID ใหม่จากรูปภาพแล้ว]
+    ["120714138513879"] = "Cursed energy"
+}
+
+-- 2. เสียง Kick / Hit ( Pause แยกต่างหาก 0.6 วินาที ไม่นับ Burst)
+local KICK_SOUND_IDS = {
+    ["105373583781618"] = "tk8_kick_hit" -- [เพิ่ม ID เสียงเตะจากรูปภาพ]
 }
 
 local MODES = {
@@ -34,10 +40,12 @@ local currentModeKey = "Normal"
 local SPAM_SPEED = 0.03                       
 local FAR_DISTANCE = 15.0                     
 
-local BURST_COUNT_THRESHOLD = 2              -- จำนวนครั้งการวาร์ปที่ใช้ปลด Pause หลัก
+local UNPAUSE_THRESHOLD = 2                  -- วาร์ป 2 ครั้ง = ยกเลิก Pause
+local PRESS_F_THRESHOLD = 3                   -- วาร์ป 3 ครั้ง = กดปุ่ม F 1 ที
 local BURST_TIME_WINDOW = 0.6                -- กรอบเวลานับเสียงรัว (วินาที)
 local SOUND_DEBOUNCE_TIME = 0.10             -- ระยะเวลาคูลดาวน์กันนับเสียงเบิ้ล (วินาที)
 local LOCK_DURATION = 0.5                    
+local KICK_PAUSE_DURATION = 0.6              -- ระยะเวลา Pause สำหรับเสียงเตะ (0.6 วินาที)
 
 --------------------------------------------------------------------------------
 -- ตัวแปรระบบ
@@ -47,7 +55,8 @@ local isLocked = true
 local pauseEndTime = 0
 local soundTimestamps = {}
 local trackedSounds = {}
-local lastSoundTriggerTime = 0
+local lastTeleportTriggerTime = 0
+local lastKickTriggerTime = 0
 
 local isLockingLook = false
 local lockLookEndTime = 0
@@ -128,20 +137,23 @@ BurstText.Name = "BurstText"
 BurstText.Parent = BurstBarBg
 BurstText.Size = UDim2.new(1, 0, 1, 0)
 BurstText.BackgroundTransparency = 1
-BurstText.Text = "BURST COUNT: 0/2"
+BurstText.Text = "BURST COUNT: 0/3"
 BurstText.TextColor3 = Color3.fromRGB(255, 255, 255)
 BurstText.TextSize = 10
 BurstText.Font = Enum.Font.SourceSansBold
 
 local function updateBurstBar(count)
-    local percentage = math.clamp(count / BURST_COUNT_THRESHOLD, 0, 1)
+    local percentage = math.clamp(count / PRESS_F_THRESHOLD, 0, 1)
     BurstBarFill:TweenSize(UDim2.new(percentage, 0, 1, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.1, true)
     
-    if count >= BURST_COUNT_THRESHOLD then
-        BurstText.Text = "⚡ BURST x" .. count .. " TRIGGERED! UNPAUSE"
-        BurstBarFill.BackgroundColor3 = Color3.fromRGB(255, 220, 0)
+    if count == 2 then
+        BurstText.Text = "⚡ BURST x2 (UNPAUSE)"
+        BurstBarFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
+    elseif count >= 3 then
+        BurstText.Text = "💥 BURST x3 (PRESSED [F] KEY!)"
+        BurstBarFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
     else
-        BurstText.Text = "BURST COUNT: " .. count .. "/" .. BURST_COUNT_THRESHOLD
+        BurstText.Text = "BURST COUNT: " .. count .. "/3"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
     end
 end
@@ -295,6 +307,17 @@ NormalModeBtn.MouseButton1Click:Connect(function() setCombatMode("Normal") end)
 CautiousModeBtn.MouseButton1Click:Connect(function() setCombatMode("Cautious") end)
 
 --------------------------------------------------------------------------------
+-- ฟังก์ชันจำลองการกดปุ่ม F
+--------------------------------------------------------------------------------
+local function pressKeyF()
+    task.spawn(function()
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+        task.wait(0.05)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+    end)
+end
+
+--------------------------------------------------------------------------------
 -- ฟังก์ชันค้นหาและหมุนมุมมอง
 --------------------------------------------------------------------------------
 local function getBossRoot()
@@ -329,20 +352,17 @@ local function safeFaceTarget(targetRoot)
 end
 
 --------------------------------------------------------------------------------
--- ประมวลผลเมื่อตรวจพบเสียงวาร์ป
+-- ประมวลผลเสียงเตะ (Kick Sound Processor - Pause 0.6s แยกต่างหาก)
 --------------------------------------------------------------------------------
-local function onSoundTriggered()
+local function onKickSoundTriggered()
     local now = tick()
     
-    -- === ระบบ Debounce ป้องกันการนับเสียงเบิ้ล ===
-    if now - lastSoundTriggerTime < SOUND_DEBOUNCE_TIME then
+    if now - lastKickTriggerTime < SOUND_DEBOUNCE_TIME then
         return 
     end
-    lastSoundTriggerTime = now
+    lastKickTriggerTime = now
 
-    local activeProfile = MODES[currentModeKey]
-    
-    -- === 1. Auto Look At ===
+    -- Auto Look At
     local bossRoot, bossName = getBossRoot()
     if bossRoot then
         isLockingLook = true
@@ -350,7 +370,39 @@ local function onSoundTriggered()
         currentTargetRoot = bossRoot
     end
 
-    -- === 2. LMB Spam Pause / Burst ===
+    -- สั่ง Pause 0.6 วินาทีเสมอสำหรับท่าเตะ
+    pauseEndTime = now + KICK_PAUSE_DURATION
+
+    StatusLabel.Text = "🦶 KICK DETECTED! PAUSE (" .. string.format("%.1f", KICK_PAUSE_DURATION) .. "s)"
+    StatusLabel.TextColor3 = Color3.fromRGB(255, 120, 0)
+    
+    if isHolding then
+        HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- ประมวลผลเสียงวาร์ป (Teleport Sound Processor - นับ Burst / กด F)
+--------------------------------------------------------------------------------
+local function onTeleportSoundTriggered()
+    local now = tick()
+    
+    if now - lastTeleportTriggerTime < SOUND_DEBOUNCE_TIME then
+        return 
+    end
+    lastTeleportTriggerTime = now
+
+    local activeProfile = MODES[currentModeKey]
+    
+    -- Auto Look At
+    local bossRoot, bossName = getBossRoot()
+    if bossRoot then
+        isLockingLook = true
+        lockLookEndTime = now + LOCK_DURATION
+        currentTargetRoot = bossRoot
+    end
+
+    -- นับ Burst สะสม
     table.insert(soundTimestamps, now)
     
     for i = #soundTimestamps, 1, -1 do
@@ -359,16 +411,28 @@ local function onSoundTriggered()
         end
     end
 
-    -- อัปเดตหลอดสะสมค่า UI
-    updateBurstBar(#soundTimestamps)
+    local currentBurstCount = #soundTimestamps
+    updateBurstBar(currentBurstCount)
 
-    -- ตรวจพบเสียงวาร์ปรัวตั้งแต่ 2 ครั้งขึ้นไป -> ยกเลิก Pause ทันที
-    if #soundTimestamps >= BURST_COUNT_THRESHOLD then
+    -- วาร์ป 3 ครั้ง = กด F + ปลด Pause
+    if currentBurstCount >= PRESS_F_THRESHOLD then
         pauseEndTime = 0
-        local countTriggered = #soundTimestamps
         soundTimestamps = {}
+        pressKeyF()
         
-        StatusLabel.Text = "⚡ BURST x" .. countTriggered .. "! UNPAUSE & LOOKING!"
+        StatusLabel.Text = "💥 BURST x3! PRESSED [F] KEY & UNPAUSE!"
+        StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+        if isHolding then
+            HoldButton.BackgroundColor3 = Color3.fromRGB(50, 220, 50)
+        end
+        return
+    end
+
+    -- วาร์ป 2 ครั้ง = ปลด Pause
+    if currentBurstCount >= UNPAUSE_THRESHOLD then
+        pauseEndTime = 0
+        
+        StatusLabel.Text = "⚡ BURST x2! UNPAUSE & LOOKING!"
         StatusLabel.TextColor3 = Color3.fromRGB(0, 220, 255)
         if isHolding then
             HoldButton.BackgroundColor3 = Color3.fromRGB(50, 220, 50)
@@ -405,18 +469,23 @@ local function checkAndTrackSound(inst)
     if inst:IsA("Sound") and not trackedSounds[inst] then
         local soundIdStr = tostring(inst.SoundId)
         
-        for targetId, _ in pairs(TARGET_SOUND_IDS) do
+        -- ตรวจจับเสียง Teleport
+        for targetId, _ in pairs(TELEPORT_SOUND_IDS) do
             if soundIdStr:find(targetId) then
                 trackedSounds[inst] = true
-                
-                inst.Played:Connect(function()
-                    onSoundTriggered()
-                end)
-                
-                if inst.IsPlaying then
-                    onSoundTriggered()
-                end
-                break
+                inst.Played:Connect(onTeleportSoundTriggered)
+                if inst.IsPlaying then onTeleportSoundTriggered() end
+                return
+            end
+        end
+
+        -- ตรวจจับเสียง Kick / Hit
+        for targetId, _ in pairs(KICK_SOUND_IDS) do
+            if soundIdStr:find(targetId) then
+                trackedSounds[inst] = true
+                inst.Played:Connect(onKickSoundTriggered)
+                if inst.IsPlaying then onKickSoundTriggered() end
+                return
             end
         end
     end
@@ -448,7 +517,7 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- ตรวจสอบและรีเซ็ตหลอด Burst หากเกินเวลา BURST_TIME_WINDOW โดยไม่มีเสียงใหม่
+    -- รีเซ็ตหลอด Burst หากเกินเวลา
     for i = #soundTimestamps, 1, -1 do
         if now - soundTimestamps[i] > BURST_TIME_WINDOW then
             table.remove(soundTimestamps, i)
@@ -486,48 +555,4 @@ end)
 -- ลูปสแปมเมาส์ซ้าย (LMB Attack Loop)
 --------------------------------------------------------------------------------
 local function clickLMB()
-    local viewportSize = Camera.ViewportSize
-    local centerX = viewportSize.X / 2
-    local centerY = viewportSize.Y / 2
-
-    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
-    task.wait(0.01)
-    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
-end
-
-local function startSpam()
-    task.spawn(function()
-        while isHolding do
-            local currentTime = tick()
-
-            if currentTime < pauseEndTime then
-                HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
-            else
-                StatusLabel.Text = "⚔ SPAMMING ATTACK..."
-                StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
-                HoldButton.BackgroundColor3 = Color3.fromRGB(50, 220, 50)
-                
-                clickLMB()
-            end
-
-            task.wait(SPAM_SPEED)
-        end
-    end)
-end
-
-HoldButton.MouseButton1Down:Connect(function()
-    if not isHolding then
-        isHolding = true
-        startSpam()
-    end
-end)
-
-HoldButton.MouseButton1Up:Connect(function()
-    isHolding = false
-    HoldButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
-end)
-
-HoldButton.MouseLeave:Connect(function()
-    isHolding = false
-    HoldButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
-end)
+    local
