@@ -13,10 +13,9 @@ local Camera = Workspace.CurrentCamera
 --------------------------------------------------------------------------------
 local TARGET_SOUND_IDS = {
     ["108688312097046"] = "Smoke_Teleport_Poof_4", --[span_0](start_span)[span_0](end_span)
-    ["108156925383225"] = "SidestepEnd"              --[span_1](start_span)[span_1](end_span)
+    ["108156925383225"] = "SidestepEnd"              --
 }
 
--- กำหนดตารางโปรไฟล์โหมดการสู้
 local MODES = {
     ["Normal"] = {
         Name = "⚔️ Normal Mode (สู้ปกติ)",
@@ -30,16 +29,13 @@ local MODES = {
     }
 }
 
-local currentModeKey = "Normal"               -- โหมดเริ่มต้น (Normal)
-local SPAM_SPEED = 0.03                       -- ความเร็วในการสแปมคลิก (วินาที)
-local FAR_DISTANCE = 15.0                     -- ระยะห่างที่นับว่าเป็นระยะไกล (Studs)
+local currentModeKey = "Normal"               
+local SPAM_SPEED = 0.03                       
+local FAR_DISTANCE = 15.0                     
 
--- การปลด Pause เมื่อบอสวาร์ปรัวๆ (Burst Teleport)
-local BURST_COUNT_THRESHOLD = 3              -- จำนวนครั้งการเล่นเสียงติดกัน
+local BURST_COUNT_THRESHOLD = 3              -- จำนวนครั้งที่นับ
 local BURST_TIME_WINDOW = 0.6                -- กรอบเวลานับเสียงรัว (วินาที)
-
--- การหมุนหันมอง (Auto Look At)
-local LOCK_DURATION = 0.5                    -- ระยะเวลาในการหมุนตัว/กล้องมองบอส (วินาที)
+local LOCK_DURATION = 0.5                    
 
 --------------------------------------------------------------------------------
 -- ตัวแปรระบบ
@@ -67,7 +63,7 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
 end)
 
 --------------------------------------------------------------------------------
--- จัดการ UI (Main Menu & Controls)
+-- จัดการ UI
 --------------------------------------------------------------------------------
 pcall(function()
     local oldGui = (gethui and gethui():FindFirstChild("ComboSpamMenuGui")) or CoreGui:FindFirstChild("ComboSpamMenuGui")
@@ -86,8 +82,8 @@ local StatusCorner = Instance.new("UICorner")
 StatusLabel.Name = "StatusLabel"
 StatusLabel.Parent = ScreenGui
 StatusLabel.AnchorPoint = Vector2.new(0.5, 0)
-StatusLabel.Position = UDim2.new(0.5, 0, 0.05, 0)
-StatusLabel.Size = UDim2.new(0, 310, 0, 35)
+StatusLabel.Position = UDim2.new(0.5, 0, 0.04, 0)
+StatusLabel.Size = UDim2.new(0, 310, 0, 32)
 StatusLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 StatusLabel.BackgroundTransparency = 0.25
 StatusLabel.Text = "🛡️ NORMAL MODE READY"
@@ -97,6 +93,56 @@ StatusLabel.Font = Enum.Font.SourceSansBold
 
 StatusCorner.CornerRadius = UDim.new(0, 8)
 StatusCorner.Parent = StatusLabel
+
+-- 1.5 เพิ่มหลอดสะสมค่า Burst Progress Bar
+local BurstBarBg = Instance.new("Frame")
+local BurstBarBgCorner = Instance.new("UICorner")
+local BurstBarFill = Instance.new("Frame")
+local BurstBarFillCorner = Instance.new("UICorner")
+local BurstText = Instance.new("TextLabel")
+
+BurstBarBg.Name = "BurstBarBg"
+BurstBarBg.Parent = ScreenGui
+BurstBarBg.AnchorPoint = Vector2.new(0.5, 0)
+BurstBarBg.Position = UDim2.new(0.5, 0, 0.082, 0)
+BurstBarBg.Size = UDim2.new(0, 310, 0, 14)
+BurstBarBg.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+BurstBarBg.BackgroundTransparency = 0.3
+
+BurstBarBgCorner.CornerRadius = UDim.new(0, 4)
+BurstBarBgCorner.Parent = BurstBarBg
+
+BurstBarFill.Name = "BurstBarFill"
+BurstBarFill.Parent = BurstBarBg
+BurstBarFill.Position = UDim2.new(0, 0, 0, 0)
+BurstBarFill.Size = UDim2.new(0, 0, 1, 0) -- เริ่มต้น 0%
+BurstBarFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
+
+BurstBarFillCorner.CornerRadius = UDim.new(0, 4)
+BurstBarFillCorner.Parent = BurstBarFill
+
+BurstText.Name = "BurstText"
+BurstText.Parent = BurstBarBg
+BurstText.Size = UDim2.new(1, 0, 1, 0)
+BurstText.BackgroundTransparency = 1
+BurstText.Text = "BURST COUNT: 0/3"
+BurstText.TextColor3 = Color3.fromRGB(255, 255, 255)
+BurstText.TextSize = 10
+BurstText.Font = Enum.Font.SourceSansBold
+
+-- ฟังก์ชันอัปเดตหลอดสะสมค่า
+local function updateBurstBar(count)
+    local percentage = math.clamp(count / BURST_COUNT_THRESHOLD, 0, 1)
+    BurstBarFill:TweenSize(UDim2.new(percentage, 0, 1, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.1, true)
+    
+    if count >= BURST_COUNT_THRESHOLD then
+        BurstText.Text = "⚡ BURST TRIGGERED! (3/3)"
+        BurstBarFill.BackgroundColor3 = Color3.fromRGB(255, 220, 0)
+    else
+        BurstText.Text = "BURST COUNT: " .. count .. "/" .. BURST_COUNT_THRESHOLD
+        BurstBarFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
+    end
+end
 
 -- 2. ปุ่มสแปมหลัก (HOLD TO SPAM)
 local HoldButton = Instance.new("TextButton")
@@ -119,7 +165,7 @@ HoldButton.Draggable = not isLocked
 HoldCorner.CornerRadius = UDim.new(0, 45)
 HoldCorner.Parent = HoldButton
 
--- 3. ปุ่ม ล็อค/ปลดล็อก ปุ่มหลัก
+-- 3. ปุ่ม ล็อค/ปลดล็อก
 local LockButton = Instance.new("TextButton")
 local LockCorner = Instance.new("UICorner")
 
@@ -195,7 +241,6 @@ MenuTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
 MenuTitle.TextSize = 13
 MenuTitle.Font = Enum.Font.SourceSansBold
 
--- ปุ่ม Normal Mode
 NormalModeBtn.Name = "NormalModeBtn"
 NormalModeBtn.Parent = MainMenuFrame
 NormalModeBtn.Position = UDim2.new(0.08, 0, 0.3, 0)
@@ -209,7 +254,6 @@ NormalModeBtn.Font = Enum.Font.SourceSansBold
 NormalBtnCorner.CornerRadius = UDim.new(0, 6)
 NormalBtnCorner.Parent = NormalModeBtn
 
--- ปุ่ม Cautious Mode
 CautiousModeBtn.Name = "CautiousModeBtn"
 CautiousModeBtn.Parent = MainMenuFrame
 CautiousModeBtn.Position = UDim2.new(0.08, 0, 0.63, 0)
@@ -223,12 +267,10 @@ CautiousModeBtn.Font = Enum.Font.SourceSansBold
 CautiousBtnCorner.CornerRadius = UDim.new(0, 6)
 CautiousBtnCorner.Parent = CautiousModeBtn
 
--- ควบคุมการเปิด/ปิด เมนู
 MenuToggleButton.MouseButton1Click:Connect(function()
     MainMenuFrame.Visible = not MainMenuFrame.Visible
 end)
 
--- ฟังก์ชันสำหรับอัปเดตปุ่มโหมด
 local function setCombatMode(modeKey)
     currentModeKey = modeKey
     if modeKey == "Normal" then
@@ -251,7 +293,7 @@ NormalModeBtn.MouseButton1Click:Connect(function() setCombatMode("Normal") end)
 CautiousModeBtn.MouseButton1Click:Connect(function() setCombatMode("Cautious") end)
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันค้นหาและหมุนมุมมอง (Auto Look At)
+-- ฟังก์ชันค้นหาและหมุนมุมมอง
 --------------------------------------------------------------------------------
 local function getBossRoot()
     local miscFolder = Workspace:FindFirstChild("Misc")
@@ -308,6 +350,9 @@ local function onSoundTriggered()
         end
     end
 
+    -- อัปเดตหลอดสะสมค่า UI
+    updateBurstBar(#soundTimestamps)
+
     -- ตรวจพบเสียงวาร์ปรัวครบ 3 ครั้ง -> ปลด Pause
     if #soundTimestamps >= BURST_COUNT_THRESHOLD then
         pauseEndTime = 0
@@ -321,7 +366,7 @@ local function onSoundTriggered()
         return
     end
 
-    -- วาร์ปปกติ -> ดึงค่า Pause จากโหมดปัจจุบันที่เลือก
+    -- วาร์ปปกติ
     local duration = activeProfile.ClosePause
     local distanceType = "CLOSE"
 
@@ -335,7 +380,7 @@ local function onSoundTriggered()
 
     pauseEndTime = now + duration
 
-    StatusLabel.Text = "👀 LOOK + ⚠️ " .. distanceType .. " PAUSE (" .. string.format("%.1f", duration) .. "s)"
+    StatusLabel.Text = "👀 LOOK + ⚠️️ " .. distanceType .. " PAUSE (" .. string.format("%.1f", duration) .. "s)"
     StatusLabel.TextColor3 = (distanceType == "FAR") and Color3.fromRGB(255, 50, 50) or Color3.fromRGB(255, 150, 0)
     
     if isHolding then
@@ -382,7 +427,7 @@ SoundService.DescendantAdded:Connect(checkAndTrackSound)
 scanAllSounds()
 
 --------------------------------------------------------------------------------
--- Heartbeat Loop (ควบคุม Auto Look At + อัปเดต UI)
+-- Heartbeat Loop
 --------------------------------------------------------------------------------
 RunService.Heartbeat:Connect(function()
     local now = tick()
@@ -390,6 +435,14 @@ RunService.Heartbeat:Connect(function()
     if not myRoot or not myRoot.Parent then
         if LocalPlayer.Character then
             myRoot = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        end
+    end
+
+    -- ตรวจสอบและรีเซ็ตหลอด Burst หากเกินเวลา BURST_TIME_WINDOW โดยไม่มีเสียงใหม่
+    for i = #soundTimestamps, 1, -1 do
+        if now - soundTimestamps[i] > BURST_TIME_WINDOW then
+            table.remove(soundTimestamps, i)
+            updateBurstBar(#soundTimestamps)
         end
     end
 
@@ -440,7 +493,7 @@ local function startSpam()
             if currentTime < pauseEndTime then
                 HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
             else
-                StatusLabel.Text = "⚔️️ SPAMMING ATTACK..."
+                StatusLabel.Text = "⚔ SPAMMING ATTACK..."
                 StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
                 HoldButton.BackgroundColor3 = Color3.fromRGB(50, 220, 50)
                 
