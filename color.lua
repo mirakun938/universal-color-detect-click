@@ -13,7 +13,8 @@ local Camera = Workspace.CurrentCamera
 --------------------------------------------------------------------------------
 local TARGET_SOUND_IDS = {
     ["108688312097046"] = "Smoke_Teleport_Poof_4",
-    ["108156925383225"] = "SidestepEnd"
+    ["108156925383225"] = "SidestepEnd",
+    ["120714138513879"] = "Cursed energy" -- [เพิ่ม ID ใหม่จากรูปภาพแล้ว]
 }
 
 local MODES = {
@@ -33,9 +34,9 @@ local currentModeKey = "Normal"
 local SPAM_SPEED = 0.03                       
 local FAR_DISTANCE = 15.0                     
 
-local BURST_COUNT_THRESHOLD = 3              -- จำนวนครั้งที่นับ
+local BURST_COUNT_THRESHOLD = 2              -- จำนวนครั้งการวาร์ปที่ใช้ปลด Pause หลัก
 local BURST_TIME_WINDOW = 0.6                -- กรอบเวลานับเสียงรัว (วินาที)
-local SOUND_DEBOUNCE_TIME = 0.10             -- ระยะเวลาคูลดาวน์กันนับเสียงเบิ้ล/เล่นพร้อมกัน (วินาที)
+local SOUND_DEBOUNCE_TIME = 0.10             -- ระยะเวลาคูลดาวน์กันนับเสียงเบิ้ล (วินาที)
 local LOCK_DURATION = 0.5                    
 
 --------------------------------------------------------------------------------
@@ -46,7 +47,7 @@ local isLocked = true
 local pauseEndTime = 0
 local soundTimestamps = {}
 local trackedSounds = {}
-local lastSoundTriggerTime = 0               -- เก็บเวลาที่บันทึกเสียงล่าสุด (ใช้กันเบิ้ล)
+local lastSoundTriggerTime = 0
 
 local isLockingLook = false
 local lockLookEndTime = 0
@@ -127,7 +128,7 @@ BurstText.Name = "BurstText"
 BurstText.Parent = BurstBarBg
 BurstText.Size = UDim2.new(1, 0, 1, 0)
 BurstText.BackgroundTransparency = 1
-BurstText.Text = "BURST COUNT: 0/3"
+BurstText.Text = "BURST COUNT: 0/2"
 BurstText.TextColor3 = Color3.fromRGB(255, 255, 255)
 BurstText.TextSize = 10
 BurstText.Font = Enum.Font.SourceSansBold
@@ -137,7 +138,7 @@ local function updateBurstBar(count)
     BurstBarFill:TweenSize(UDim2.new(percentage, 0, 1, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.1, true)
     
     if count >= BURST_COUNT_THRESHOLD then
-        BurstText.Text = "⚡ BURST TRIGGERED! (3/3)"
+        BurstText.Text = "⚡ BURST x" .. count .. " TRIGGERED! UNPAUSE"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(255, 220, 0)
     else
         BurstText.Text = "BURST COUNT: " .. count .. "/" .. BURST_COUNT_THRESHOLD
@@ -328,14 +329,14 @@ local function safeFaceTarget(targetRoot)
 end
 
 --------------------------------------------------------------------------------
--- ประมวลผลเมื่อตรวจพบเสียงวาร์ป (Sound Event Processor พร้อมระบบกันนับเบิ้ล)
+-- ประมวลผลเมื่อตรวจพบเสียงวาร์ป
 --------------------------------------------------------------------------------
 local function onSoundTriggered()
     local now = tick()
     
-    -- === เพิ่มระบบ Debounce ป้องกันการนับเสียงเบิ้ลเมื่อเล่นพร้อมกัน ===
+    -- === ระบบ Debounce ป้องกันการนับเสียงเบิ้ล ===
     if now - lastSoundTriggerTime < SOUND_DEBOUNCE_TIME then
-        return -- ข้ามการทำงานหากเกิดขึ้นถี่เกินกว่า 0.1 วินาที
+        return 
     end
     lastSoundTriggerTime = now
 
@@ -361,12 +362,13 @@ local function onSoundTriggered()
     -- อัปเดตหลอดสะสมค่า UI
     updateBurstBar(#soundTimestamps)
 
-    -- ตรวจพบเสียงวาร์ปรัวครบ 3 ครั้ง -> ปลด Pause
+    -- ตรวจพบเสียงวาร์ปรัวตั้งแต่ 2 ครั้งขึ้นไป -> ยกเลิก Pause ทันที
     if #soundTimestamps >= BURST_COUNT_THRESHOLD then
         pauseEndTime = 0
+        local countTriggered = #soundTimestamps
         soundTimestamps = {}
         
-        StatusLabel.Text = "⚡ BURST x3! UNPAUSE & LOOKING!"
+        StatusLabel.Text = "⚡ BURST x" .. countTriggered .. "! UNPAUSE & LOOKING!"
         StatusLabel.TextColor3 = Color3.fromRGB(0, 220, 255)
         if isHolding then
             HoldButton.BackgroundColor3 = Color3.fromRGB(50, 220, 50)
@@ -374,7 +376,7 @@ local function onSoundTriggered()
         return
     end
 
-    -- วาร์ปปกติ
+    -- วาร์ปปกติ (ครั้งแรก)
     local duration = activeProfile.ClosePause
     local distanceType = "CLOSE"
 
