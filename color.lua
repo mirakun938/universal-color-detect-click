@@ -14,7 +14,8 @@ local Camera = Workspace.CurrentCamera
 local TARGET_SOUND_IDS = {
     ["108688312097046"] = "Smoke_Teleport_Poof_4",
     ["108156925383225"] = "SidestepEnd",
-    ["120714138513879"] = "Cursed energy"
+    ["120714138513879"] = "Cursed energy",
+    ["105373583781618"] = "tk8_kick_hit" -- [เพิ่ม ID สุดท้ายจากรูปแล้ว]
 }
 
 local MODES = {
@@ -344,7 +345,7 @@ local function safeFaceTarget(targetRoot)
 end
 
 --------------------------------------------------------------------------------
--- ประมวลผลเมื่อตรวจพบเสียงวาร์ป (Sound Event Processor)
+-- ประมวลผลเมื่อตรวจพบเสียงวาร์ป
 --------------------------------------------------------------------------------
 local function onSoundTriggered()
     local now = tick()
@@ -381,7 +382,7 @@ local function onSoundTriggered()
     if currentBurstCount >= PRESS_F_THRESHOLD then
         pauseEndTime = 0
         soundTimestamps = {}
-        pressKeyF() -- กดปุ่ม F 1 ที
+        pressKeyF()
         
         StatusLabel.Text = "💥 BURST x3! PRESSED [F] KEY & UNPAUSE!"
         StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
