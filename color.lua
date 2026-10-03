@@ -37,7 +37,8 @@ local FAR_DISTANCE = 15.0
 
 local KICK_HIT_PAUSE = 0.5                    -- ระยะเวลา Pause เมื่อโดนท่าเตะ (วินาที)
 local BURST2_PAUSE_DURATION = 0.25            -- Burst 2 ให้ Pause 0.25 วินาที
-local RETREAT_DURATION = 0.6                  -- ระยะเวลาในการถอยหลังหนีบอส (วินาที)
+local BURST3_PAUSE_DURATION = 0.5             -- Burst 3 ให้ Pause 0.5 วินาทีก่อนเริ่มตี
+local RETREAT_DURATION = 1.0                  -- ระยะเวลาถอยหลังรวม (วินาที)
 
 local PRESS_BURST_THRESHOLD = 3               -- วาร์ป 3 ครั้ง = ถอยหลังสร้างระยะห่าง
 local BURST_TIME_WINDOW = 0.6                -- กรอบเวลานับเสียงรัว (วินาที)
@@ -102,7 +103,7 @@ StatusLabel.Font = Enum.Font.SourceSansBold
 StatusCorner.CornerRadius = UDim.new(0, 8)
 StatusCorner.Parent = StatusLabel
 
--- 1.5 หลอดสะสมค่า Burst Progress Bar (3 ขั้น)
+-- 1.5 หลอดสะสมค่า Burst Progress Bar
 local BurstBarBg = Instance.new("Frame")
 local BurstBarBgCorner = Instance.new("UICorner")
 local BurstBarFill = Instance.new("Frame")
@@ -146,7 +147,7 @@ local function updateBurstBar(count)
         BurstText.Text = "⚡ BURST x2 (PAUSE 0.25s)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
     elseif count >= 3 then
-        BurstText.Text = "💥 BURST x3 (RETREAT / DISTANCE)"
+        BurstText.Text = "💥 BURST x3 (RETREAT + ATTACK)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
     else
         BurstText.Text = "BURST COUNT: " .. count .. "/3"
@@ -300,13 +301,14 @@ NormalModeBtn.MouseButton1Click:Connect(function() setCombatMode("Normal") end)
 CautiousModeBtn.MouseButton1Click:Connect(function() setCombatMode("Cautious") end)
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันจำลองการเดินถอยหลังหนีบอส (ระยะห่าง)
+-- ฟังก์ชันจำลองการเดินถอยหลังหนีบอส
 --------------------------------------------------------------------------------
 local function retreatFromTarget()
     task.spawn(function()
-        -- กดปุ่ม S เพื่อเดินถอยหลังสร้างระยะห่าง
+        -- เริ่มกดปุ่ม S ถอยหลัง
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.S, false, game)
         task.wait(RETREAT_DURATION)
+        -- ปล่อยปุ่ม S เมื่อครบกำหนดเวลา
         VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
     end)
 end
@@ -378,7 +380,7 @@ local function onSoundTriggered(soundCategory)
         return
     end
 
-    -- === กรณีที่ 2: เสียง TELEPORT (คิดระบบ Burst + เดินถอยหลัง) ===
+    -- === กรณีที่ 2: เสียง TELEPORT (คิดระบบ Burst) ===
     table.insert(soundTimestamps, now)
     
     for i = #soundTimestamps, 1, -1 do
@@ -390,13 +392,14 @@ local function onSoundTriggered(soundCategory)
     local currentBurstCount = #soundTimestamps
     updateBurstBar(currentBurstCount)
 
-    -- เงื่อนไขที่ 1: Burst 3 -> ถอยหลังสร้างระยะห่างออกจากบอส (ไม่กด Q/F แล้ว)
+    -- เงื่อนไขที่ 1: Burst 3 -> ถอยหลังทันที + Pause 0.5s แล้วเริ่มโจมตีระหว่างถอยหลัง
     if currentBurstCount >= PRESS_BURST_THRESHOLD then
         soundTimestamps = {}
-        retreatFromTarget() -- สั่งเดินถอยหลังออกห่าง
-        pauseEndTime = now + RETREAT_DURATION + 0.2 -- Pause การตีระหว่างถอยหลัง
         
-        StatusLabel.Text = "💥 BURST x3! RETREAT & DISTANCING!"
+        retreatFromTarget()                          -- ถอยหลังทันทีเป็นอันดับแรก
+        pauseEndTime = now + BURST3_PAUSE_DURATION  -- Pause หยุดตี 0.5 วินาที
+        
+        StatusLabel.Text = "💥 BURST x3! RETREAT (PAUSE 0.5s -> ATTACK)"
         StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
         if isHolding then
             HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
@@ -431,7 +434,7 @@ local function onSoundTriggered(soundCategory)
 
     pauseEndTime = now + duration
 
-    StatusLabel.Text = "👀 LOOK + ⚠️️ " .. distanceType .. " PAUSE (" .. string.format("%.1f", duration) .. "s)"
+    StatusLabel.Text = "👀 LOOK + ⚠️ " .. distanceType .. " PAUSE (" .. string.format("%.1f", duration) .. "s)"
     StatusLabel.TextColor3 = (distanceType == "FAR") and Color3.fromRGB(255, 50, 50) or Color3.fromRGB(255, 150, 0)
     
     if isHolding then
@@ -571,4 +574,4 @@ end)
 HoldButton.MouseLeave:Connect(function()
     isHolding = false
     HoldButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
-end)
+enConnect
