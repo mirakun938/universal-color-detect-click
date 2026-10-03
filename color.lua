@@ -11,7 +11,6 @@ local Camera = Workspace.CurrentCamera
 --------------------------------------------------------------------------------
 -- ตั้งค่าระบบ (CONFIG & MODES)
 --------------------------------------------------------------------------------
--- แยกประเภทของเสียง Sound ID
 local SOUND_TYPES = {
     ["108688312097046"] = "TELEPORT", -- Smoke_Teleport_Poof_4
     ["108156925383225"] = "TELEPORT", -- SidestepEnd
@@ -37,10 +36,10 @@ local SPAM_SPEED = 0.03
 local FAR_DISTANCE = 15.0                     
 
 local KICK_HIT_PAUSE = 0.5                    -- ระยะเวลา Pause เมื่อโดนท่าเตะ (วินาที)
+local BURST2_PAUSE_DURATION = 0.25            -- Burst 2 ให้ Pause 0.25 วินาที
+local RETREAT_DURATION = 0.6                  -- ระยะเวลาในการถอยหลังหนีบอส (วินาที)
 
-local UNPAUSE_THRESHOLD = 2                  -- วาร์ป 2 ครั้ง = ยกเลิก Pause
-local PRESS_Q_THRESHOLD = 3                   -- วาร์ป 3 ครั้ง = กดปุ่ม Q + F สำรอง
-local Q_PAUSE_DURATION = 1.0                  -- พักการตี 1.0 วินาทีเมื่อ Burst 3
+local PRESS_BURST_THRESHOLD = 3               -- วาร์ป 3 ครั้ง = ถอยหลังสร้างระยะห่าง
 local BURST_TIME_WINDOW = 0.6                -- กรอบเวลานับเสียงรัว (วินาที)
 local SOUND_DEBOUNCE_TIME = 0.10             -- คูลดาวน์กันนับเสียงเบิ้ล (วินาที)
 local LOCK_DURATION = 0.5                    
@@ -140,14 +139,14 @@ BurstText.TextSize = 10
 BurstText.Font = Enum.Font.SourceSansBold
 
 local function updateBurstBar(count)
-    local percentage = math.clamp(count / PRESS_Q_THRESHOLD, 0, 1)
+    local percentage = math.clamp(count / PRESS_BURST_THRESHOLD, 0, 1)
     BurstBarFill:TweenSize(UDim2.new(percentage, 0, 1, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.1, true)
     
     if count == 2 then
-        BurstText.Text = "⚡ BURST x2 (UNPAUSE)"
+        BurstText.Text = "⚡ BURST x2 (PAUSE 0.25s)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
     elseif count >= 3 then
-        BurstText.Text = "💥 BURST x3 (PRESSED [Q] + [F] BLOCK)"
+        BurstText.Text = "💥 BURST x3 (RETREAT / DISTANCE)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
     else
         BurstText.Text = "BURST COUNT: " .. count .. "/3"
@@ -301,18 +300,14 @@ NormalModeBtn.MouseButton1Click:Connect(function() setCombatMode("Normal") end)
 CautiousModeBtn.MouseButton1Click:Connect(function() setCombatMode("Cautious") end)
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันจำลองการกดปุ่ม Q แล้วตามด้วย F (บล็อกสำรอง)
+-- ฟังก์ชันจำลองการเดินถอยหลังหนีบอส (ระยะห่าง)
 --------------------------------------------------------------------------------
-local function pressEscapeCombo()
+local function retreatFromTarget()
     task.spawn(function()
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Q, false, game)
-        task.wait(0.05)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Q, false, game)
-        
-        task.wait(0.12)
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
-        task.wait(0.15)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+        -- กดปุ่ม S เพื่อเดินถอยหลังสร้างระยะห่าง
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.S, false, game)
+        task.wait(RETREAT_DURATION)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
     end)
 end
 
@@ -363,7 +358,7 @@ local function onSoundTriggered(soundCategory)
     end
     lastSoundTriggerTime[soundCategory] = now
 
-    -- === 2. Auto Look At (ทำทั้งสองกรณี) ===
+    -- === 2. Auto Look At ===
     local bossRoot, bossName = getBossRoot()
     if bossRoot then
         isLockingLook = true
@@ -383,7 +378,7 @@ local function onSoundTriggered(soundCategory)
         return
     end
 
-    -- === กรณีที่ 2: เสียง TELEPORT (คิดระบบ Burst + Q/F หลบ) ===
+    -- === กรณีที่ 2: เสียง TELEPORT (คิดระบบ Burst + เดินถอยหลัง) ===
     table.insert(soundTimestamps, now)
     
     for i = #soundTimestamps, 1, -1 do
@@ -395,13 +390,13 @@ local function onSoundTriggered(soundCategory)
     local currentBurstCount = #soundTimestamps
     updateBurstBar(currentBurstCount)
 
-    -- เงื่อนไข: วาร์ปรัวครบ 3 ครั้ง -> กดปุ่ม Q + F + Pause 1.0 วินาที
-    if currentBurstCount >= PRESS_Q_THRESHOLD then
+    -- เงื่อนไขที่ 1: Burst 3 -> ถอยหลังสร้างระยะห่างออกจากบอส (ไม่กด Q/F แล้ว)
+    if currentBurstCount >= PRESS_BURST_THRESHOLD then
         soundTimestamps = {}
-        pressEscapeCombo()
-        pauseEndTime = now + Q_PAUSE_DURATION
+        retreatFromTarget() -- สั่งเดินถอยหลังออกห่าง
+        pauseEndTime = now + RETREAT_DURATION + 0.2 -- Pause การตีระหว่างถอยหลัง
         
-        StatusLabel.Text = "💥 BURST x3! PRESSED [Q]+[F] & PAUSE 1.0s!"
+        StatusLabel.Text = "💥 BURST x3! RETREAT & DISTANCING!"
         StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
         if isHolding then
             HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
@@ -409,14 +404,14 @@ local function onSoundTriggered(soundCategory)
         return
     end
 
-    -- เงื่อนไข: วาร์ปรัวครบ 2 ครั้ง -> ยกเลิก Pause ทันที
-    if currentBurstCount >= UNPAUSE_THRESHOLD then
-        pauseEndTime = 0
+    -- เงื่อนไขที่ 2: Burst 2 -> Pause การตี 0.25 วินาที
+    if currentBurstCount == 2 then
+        pauseEndTime = now + BURST2_PAUSE_DURATION
         
-        StatusLabel.Text = "⚡ BURST x2! UNPAUSE & LOOKING!"
+        StatusLabel.Text = "⚡ BURST x2! PAUSE 0.25s"
         StatusLabel.TextColor3 = Color3.fromRGB(0, 220, 255)
         if isHolding then
-            HoldButton.BackgroundColor3 = Color3.fromRGB(50, 220, 50)
+            HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
         end
         return
     end
@@ -436,7 +431,7 @@ local function onSoundTriggered(soundCategory)
 
     pauseEndTime = now + duration
 
-    StatusLabel.Text = "👀 LOOK + ⚠️ " .. distanceType .. " PAUSE (" .. string.format("%.1f", duration) .. "s)"
+    StatusLabel.Text = "👀 LOOK + ⚠️️ " .. distanceType .. " PAUSE (" .. string.format("%.1f", duration) .. "s)"
     StatusLabel.TextColor3 = (distanceType == "FAR") and Color3.fromRGB(255, 50, 50) or Color3.fromRGB(255, 150, 0)
     
     if isHolding then
