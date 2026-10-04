@@ -51,6 +51,7 @@ local LOCK_DURATION = 0.5
 local DAMAGE_HIT_THRESHOLD = 2                -- ต้องโดนดาเมจอย่างน้อย 2 ครั้ง (ห้ามกดเมื่อโดนครั้งแรก)
 local DAMAGE_TIME_WINDOW = 0.4                -- กรอบเวลานับการโดนรัวๆ (วินาที)
 local Q_EVADE_COOLDOWN = 1.0                  -- คูลดาวน์ปุ่ม Q หลบ (วินาที)
+local DAMAGE_PAUSE_DURATION = 1.5             -- หยุดสแปมโจมตี 1.5 วินาที เมื่อโดนดาเมจ
 
 --------------------------------------------------------------------------------
 -- ตัวแปรระบบ
@@ -123,11 +124,19 @@ local function setupHealthListener(char)
                 lastQEvadeTime = now
                 damageTimestamps = {} -- รีเซ็ตคาวต์
                 
-                triggerQEvade() -- เรียกใช้ฟังก์ชันหลบด้วย Q
+                -- หยุดการสแปมโจมตีเป็นเวลา 1.5 วินาที ทันที!
+                pauseEndTime = now + DAMAGE_PAUSE_DURATION
+                
+                -- เรียกฟังก์ชันกด Q หลบ
+                triggerQEvade()
                 
                 local modeName = (currentModeKey == "Normal") and "NORMAL (DELAY 0.25s)" or "CAUTIOUS (INSTANT)"
-                StatusLabel.Text = "🚨 RAPID DAMAGE! Q EVADE [" .. modeName .. "]"
+                StatusLabel.Text = "🚨 DAMAGE PAUSE 1.5s + Q EVADE [" .. modeName .. "]"
                 StatusLabel.TextColor3 = Color3.fromRGB(255, 0, 100)
+                
+                if isHolding then
+                    HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+                end
             end
         end
         
