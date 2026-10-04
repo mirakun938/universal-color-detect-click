@@ -574,4 +574,4 @@ end)
 HoldButton.MouseLeave:Connect(function()
     isHolding = false
     HoldButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
-enConnect
+end)
