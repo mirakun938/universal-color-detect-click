@@ -22,12 +22,14 @@ local MODES = {
     ["Normal"] = {
         Name = "⚔️ Normal Mode (สู้ปกติ)",
         ClosePause = 0.6,
-        FarPause = 0.8
+        FarPause = 0.8,
+        QDelay = 0.25 -- Normal Mode หน่วงเวลา 0.25 วินาทีก่อนกด Q
     },
     ["Cautious"] = {
         Name = "🛡️ Cautious Mode (สู้แบบระวัง)",
         ClosePause = 0.7,
-        FarPause = 1.0
+        FarPause = 1.0,
+        QDelay = 0.0 -- Cautious Mode กด Q ทันที
     }
 }
 
@@ -45,6 +47,11 @@ local BURST_TIME_WINDOW = 0.6                -- กรอบเวลานั�
 local SOUND_DEBOUNCE_TIME = 0.10             -- คูลดาวน์กันนับเสียงเบิ้ล (วินาที)
 local LOCK_DURATION = 0.5                    
 
+-- ตั้งค่าระบบตรวจจับการโดนดาเมจ
+local DAMAGE_HIT_THRESHOLD = 2                -- ต้องโดนดาเมจอย่างน้อย 2 ครั้ง (ห้ามกดเมื่อโดนครั้งแรก)
+local DAMAGE_TIME_WINDOW = 0.4                -- กรอบเวลานับการโดนรัวๆ (วินาที)
+local Q_EVADE_COOLDOWN = 1.0                  -- คูลดาวน์ปุ่ม Q หลบ (วินาที)
+
 --------------------------------------------------------------------------------
 -- ตัวแปรระบบ
 --------------------------------------------------------------------------------
@@ -60,8 +67,75 @@ local lockLookEndTime = 0
 local currentTargetRoot = nil
 local lastFaceTime = 0
 
+local damageTimestamps = {}
+local lastQEvadeTime = 0
+local lastHealth = 100
+
 local myChar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local myRoot = myChar:WaitForChild("HumanoidRootPart", 5)
+local myHumanoid = myChar:WaitForChild("Humanoid", 5)
+
+--------------------------------------------------------------------------------
+-- ฟังก์ชันกดปุ่ม Q เพื่อหลบ (ตามเงื่อนไขของแต่ละโหมด)
+--------------------------------------------------------------------------------
+local function triggerQEvade()
+    task.spawn(function()
+        local activeProfile = MODES[currentModeKey]
+        local delayTime = activeProfile.QDelay or 0
+        
+        -- หากตั้งค่าให้หน่วงเวลา (Normal Mode) จะรอตามกำหนดก่อนกด Q
+        if delayTime > 0 then
+            task.wait(delayTime)
+        end
+        
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Q, false, game)
+        task.wait(0.05)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Q, false, game)
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- ระบบ ตรวจจับ Health/Damage
+--------------------------------------------------------------------------------
+local function setupHealthListener(char)
+    local hum = char:WaitForChild("Humanoid", 5)
+    if not hum then return end
+    
+    myHumanoid = hum
+    lastHealth = hum.Health
+
+    hum.HealthChanged:Connect(function(newHealth)
+        local now = tick()
+        
+        -- ตรวจจับกรณีเลือดลดลง (โดนดาเมจ)
+        if newHealth < lastHealth then
+            table.insert(damageTimestamps, now)
+            
+            -- ลบค่า timestamp ที่เก่าเกินกรอบเวลา DAMAGE_TIME_WINDOW
+            for i = #damageTimestamps, 1, -1 do
+                if now - damageTimestamps[i] > DAMAGE_TIME_WINDOW then
+                    table.remove(damageTimestamps, i)
+                end
+            end
+            
+            -- เงื่อนไข: โดนรัวๆ (2 ครั้งขึ้นไป) + ไม่อยู่ใน Cooldown ของ Q
+            if #damageTimestamps >= DAMAGE_HIT_THRESHOLD and (now - lastQEvadeTime >= Q_EVADE_COOLDOWN) then
+                lastQEvadeTime = now
+                damageTimestamps = {} -- รีเซ็ตคาวต์
+                
+                triggerQEvade() -- เรียกใช้ฟังก์ชันหลบด้วย Q
+                
+                local modeName = (currentModeKey == "Normal") and "NORMAL (DELAY 0.25s)" or "CAUTIOUS (INSTANT)"
+                StatusLabel.Text = "🚨 RAPID DAMAGE! Q EVADE [" .. modeName .. "]"
+                StatusLabel.TextColor3 = Color3.fromRGB(255, 0, 100)
+            end
+        end
+        
+        lastHealth = newHealth
+    end)
+end
+
+if myChar then setupHealthListener(myChar) end
 
 LocalPlayer.CharacterAdded:Connect(function(newChar)
     myChar = newChar
@@ -69,6 +143,8 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
     Camera = Workspace.CurrentCamera
     isLockingLook = false
     currentTargetRoot = nil
+    damageTimestamps = {}
+    setupHealthListener(newChar)
 end)
 
 --------------------------------------------------------------------------------
@@ -257,7 +333,7 @@ NormalModeBtn.Parent = MainMenuFrame
 NormalModeBtn.Position = UDim2.new(0.08, 0, 0.3, 0)
 NormalModeBtn.Size = UDim2.new(0.84, 0, 0, 35)
 NormalModeBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 100)
-NormalModeBtn.Text = "⚔️ Normal (Close 0.6s)"
+NormalModeBtn.Text = "⚔️ Normal (Q Delay 0.25s)"
 NormalModeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 NormalModeBtn.TextSize = 12
 NormalModeBtn.Font = Enum.Font.SourceSansBold
@@ -270,7 +346,7 @@ CautiousModeBtn.Parent = MainMenuFrame
 CautiousModeBtn.Position = UDim2.new(0.08, 0, 0.63, 0)
 CautiousModeBtn.Size = UDim2.new(0.84, 0, 0, 35)
 CautiousModeBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-CautiousModeBtn.Text = "🛡️ Cautious (Close 0.7s)"
+CautiousModeBtn.Text = "🛡️ Cautious (Q Instant)"
 CautiousModeBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
 CautiousModeBtn.TextSize = 12
 CautiousBtnCorner.Parent = CautiousModeBtn
@@ -305,10 +381,8 @@ CautiousModeBtn.MouseButton1Click:Connect(function() setCombatMode("Cautious") e
 --------------------------------------------------------------------------------
 local function retreatFromTarget()
     task.spawn(function()
-        -- เริ่มกดปุ่ม S ถอยหลัง
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.S, false, game)
         task.wait(RETREAT_DURATION)
-        -- ปล่อยปุ่ม S เมื่อครบกำหนดเวลา
         VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
     end)
 end
@@ -353,14 +427,12 @@ end
 local function onSoundTriggered(soundCategory)
     local now = tick()
     
-    -- === 1. Debounce ป้องกันเสียงเบิ้ล ===
     local lastTrigger = lastSoundTriggerTime[soundCategory] or 0
     if now - lastTrigger < SOUND_DEBOUNCE_TIME then
         return 
     end
     lastSoundTriggerTime[soundCategory] = now
 
-    -- === 2. Auto Look At ===
     local bossRoot, bossName = getBossRoot()
     if bossRoot then
         isLockingLook = true
@@ -368,7 +440,6 @@ local function onSoundTriggered(soundCategory)
         currentTargetRoot = bossRoot
     end
 
-    -- === กรณีที่ 1: เสียง KICK_HIT (ไม่นับ Burst / หยุดตีชั่วคราวอย่างเดียว) ===
     if soundCategory == "KICK_HIT" then
         pauseEndTime = now + KICK_HIT_PAUSE
         
@@ -380,7 +451,6 @@ local function onSoundTriggered(soundCategory)
         return
     end
 
-    -- === กรณีที่ 2: เสียง TELEPORT (คิดระบบ Burst) ===
     table.insert(soundTimestamps, now)
     
     for i = #soundTimestamps, 1, -1 do
@@ -392,12 +462,11 @@ local function onSoundTriggered(soundCategory)
     local currentBurstCount = #soundTimestamps
     updateBurstBar(currentBurstCount)
 
-    -- เงื่อนไขที่ 1: Burst 3 -> ถอยหลังทันที + Pause 0.5s แล้วเริ่มโจมตีระหว่างถอยหลัง
     if currentBurstCount >= PRESS_BURST_THRESHOLD then
         soundTimestamps = {}
         
-        retreatFromTarget()                          -- ถอยหลังทันทีเป็นอันดับแรก
-        pauseEndTime = now + BURST3_PAUSE_DURATION  -- Pause หยุดตี 0.5 วินาที
+        retreatFromTarget()
+        pauseEndTime = now + BURST3_PAUSE_DURATION
         
         StatusLabel.Text = "💥 BURST x3! RETREAT (PAUSE 0.5s -> ATTACK)"
         StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
@@ -407,7 +476,6 @@ local function onSoundTriggered(soundCategory)
         return
     end
 
-    -- เงื่อนไขที่ 2: Burst 2 -> Pause การตี 0.25 วินาที
     if currentBurstCount == 2 then
         pauseEndTime = now + BURST2_PAUSE_DURATION
         
@@ -419,7 +487,6 @@ local function onSoundTriggered(soundCategory)
         return
     end
 
-    -- วาร์ปปกติ (ครั้งแรก)
     local activeProfile = MODES[currentModeKey]
     local duration = activeProfile.ClosePause
     local distanceType = "CLOSE"
@@ -492,7 +559,6 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- ตรวจสอบและรีเซ็ตหลอด Burst หากเกินเวลา BURST_TIME_WINDOW โดยไม่มีเสียงใหม่
     for i = #soundTimestamps, 1, -1 do
         if now - soundTimestamps[i] > BURST_TIME_WINDOW then
             table.remove(soundTimestamps, i)
@@ -500,7 +566,6 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- 1. ล็อคมุมมอง
     if isLockingLook then
         if now < lockLookEndTime and currentTargetRoot and currentTargetRoot.Parent then
             if now - lastFaceTime >= 0.02 then
@@ -513,8 +578,7 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- 2. อัปเดตข้อความเมื่ออยู่นอกสถานะ Pause
-    if not isHolding and now >= pauseEndTime and not isLockingLook then
+    if not isHolding and now >= pauseEndTime and not isLockingLook and (now - lastQEvadeTime > 1.2) then
         local bossRoot, bossName = getBossRoot()
         if bossRoot then
             StatusLabel.Text = "🎯 [" .. currentModeKey:upper() .. "] TRACKING: " .. bossName:upper()
