@@ -40,7 +40,8 @@ local FAR_DISTANCE = 15.0
 local KICK_HIT_PAUSE = 0.5                    -- ระยะเวลา Pause เมื่อโดนท่าเตะ (วินาที)
 local BURST2_PAUSE_DURATION = 0.25            -- Burst 2 ให้ Pause 0.25 วินาที
 local BURST3_PAUSE_DURATION = 0.5             -- Burst 3 ให้ Pause 0.5 วินาทีก่อนเริ่มตี
-local RETREAT_DURATION = 1.0                  -- ระยะเวลาถอยหลังรวม (วินาที)
+local RETREAT_DURATION = 1.0                  -- ระยะเวลาถอยหลังรวมสำหรับ Burst 3 (วินาที)
+local TELEPORT_RETREAT_DURATION = 0.1         -- ระยะเวลาถอยหลังเมื่อ Teleport (0.1 วินาที)
 
 local PRESS_BURST_THRESHOLD = 3               -- วาร์ป 3 ครั้ง = ถอยหลังสร้างระยะห่าง
 local BURST_TIME_WINDOW = 0.6                -- กรอบเวลานับเสียงรัว (วินาที)
@@ -75,6 +76,17 @@ local lastHealth = 100
 local myChar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local myRoot = myChar:WaitForChild("HumanoidRootPart", 5)
 local myHumanoid = myChar:WaitForChild("Humanoid", 5)
+
+--------------------------------------------------------------------------------
+-- ฟังก์ชันจำลองการกด S ถอยหลัง
+--------------------------------------------------------------------------------
+local function retreatBackwards(duration)
+    task.spawn(function()
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.S, false, game)
+        task.wait(duration)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
+    end)
+end
 
 --------------------------------------------------------------------------------
 -- ฟังก์ชันกดปุ่ม Q เพื่อหลบ (ตามเงื่อนไขของแต่ละโหมด)
@@ -386,17 +398,6 @@ NormalModeBtn.MouseButton1Click:Connect(function() setCombatMode("Normal") end)
 CautiousModeBtn.MouseButton1Click:Connect(function() setCombatMode("Cautious") end)
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันจำลองการเดินถอยหลังหนีบอส
---------------------------------------------------------------------------------
-local function retreatFromTarget()
-    task.spawn(function()
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.S, false, game)
-        task.wait(RETREAT_DURATION)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
-    end)
-end
-
---------------------------------------------------------------------------------
 -- ฟังก์ชันค้นหาและหมุนมุมมอง
 --------------------------------------------------------------------------------
 local function getBossRoot()
@@ -449,6 +450,11 @@ local function onSoundTriggered(soundCategory)
         currentTargetRoot = bossRoot
     end
 
+    -- เมื่อตรวจพบเสียง Teleport ให้ถอยหลัง 0.1 วินาทีทันที!
+    if soundCategory == "TELEPORT" then
+        retreatBackwards(TELEPORT_RETREAT_DURATION)
+    end
+
     if soundCategory == "KICK_HIT" then
         pauseEndTime = now + KICK_HIT_PAUSE
         
@@ -474,7 +480,7 @@ local function onSoundTriggered(soundCategory)
     if currentBurstCount >= PRESS_BURST_THRESHOLD then
         soundTimestamps = {}
         
-        retreatFromTarget()
+        retreatBackwards(RETREAT_DURATION)
         pauseEndTime = now + BURST3_PAUSE_DURATION
         
         StatusLabel.Text = "💥 BURST x3! RETREAT (PAUSE 0.5s -> ATTACK)"
