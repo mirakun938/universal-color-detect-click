@@ -23,13 +23,13 @@ local MODES = {
         Name = "⚔️ Normal Mode (สู้ปกติ)",
         ClosePause = 0.6,
         FarPause = 0.8,
-        QDelay = 0.25 -- Normal Mode หน่วงเวลา 0.25 วินาทีก่อนกด Q
+        QDelay = 0.25
     },
     ["Cautious"] = {
         Name = "🛡️ Cautious Mode (สู้แบบระวัง)",
         ClosePause = 0.7,
         FarPause = 1.0,
-        QDelay = 0.0 -- Cautious Mode กด Q ทันที
+        QDelay = 0.0
     }
 }
 
@@ -45,14 +45,14 @@ local TELEPORT_RETREAT_DURATION = 0.1         -- ระยะเวลาถอ�
 
 local PRESS_BURST_THRESHOLD = 3               -- วาร์ป 3 ครั้ง = ถอยหลังสร้างระยะห่าง
 local BURST_TIME_WINDOW = 0.6                -- กรอบเวลานับเสียงรัว (วินาที)
-local SOUND_DEBOUNCE_TIME = 0.10             -- คูลดาวน์กันนับเสียงเบิ้ล (วินาที)
+local SOUND_DEBOUNCE_TIME = 0.08             -- ปรับเวลาคูลดาวน์รับเสียงลงเล็กน้อยเพื่อจับ Burst ได้แม่นยำขึ้น
 local LOCK_DURATION = 0.5                    
 
 -- ตั้งค่าระบบตรวจจับการโดนดาเมจ
-local DAMAGE_HIT_THRESHOLD = 2                -- ต้องโดนดาเมจอย่างน้อย 2 ครั้ง (ห้ามกดเมื่อโดนครั้งแรก)
-local DAMAGE_TIME_WINDOW = 0.4                -- กรอบเวลานับการโดนรัวๆ (วินาที)
-local Q_EVADE_COOLDOWN = 1.0                  -- คูลดาวน์ปุ่ม Q หลบ (วินาที)
-local DAMAGE_PAUSE_DURATION = 1.5             -- หยุดสแปมโจมตี 1.5 วินาที เมื่อโดนดาเมจ
+local DAMAGE_HIT_THRESHOLD = 2                
+local DAMAGE_TIME_WINDOW = 0.4                
+local Q_EVADE_COOLDOWN = 1.0                  
+local DAMAGE_PAUSE_DURATION = 1.5             
 
 --------------------------------------------------------------------------------
 -- ตัวแปรระบบ
@@ -78,25 +78,34 @@ local myRoot = myChar:WaitForChild("HumanoidRootPart", 5)
 local myHumanoid = myChar:WaitForChild("Humanoid", 5)
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันจำลองการกด S ถอยหลัง
+-- ฟังก์ชันจำลองการกด S ถอยหลัง (ปรับปรุงระบบป้องกันปุ่มค้าง/ขัดจังหวะ)
 --------------------------------------------------------------------------------
+local isRetreating = false
 local function retreatBackwards(duration)
-    task.spawn(function()
+    task.defer(function()
+        isRetreating = true
+        -- สั่งปล่อยปุ่ม S ก่อน 1 รอบเพื่อ Reset สถานะปุ่ม
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
+        task.wait(0.01)
+        
+        -- กดปุ่ม S ค้างไว้ตามระยะเวลา duration
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.S, false, game)
         task.wait(duration)
+        
+        -- ปล่อยปุ่ม S
         VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
+        isRetreating = false
     end)
 end
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันกดปุ่ม Q เพื่อหลบ (ตามเงื่อนไขของแต่ละโหมด)
+-- ฟังก์ชันกดปุ่ม Q เพื่อหลบ
 --------------------------------------------------------------------------------
 local function triggerQEvade()
     task.spawn(function()
         local activeProfile = MODES[currentModeKey]
         local delayTime = activeProfile.QDelay or 0
         
-        -- หากตั้งค่าให้หน่วงเวลา (Normal Mode) จะรอตามกำหนดก่อนกด Q
         if delayTime > 0 then
             task.wait(delayTime)
         end
@@ -120,26 +129,20 @@ local function setupHealthListener(char)
     hum.HealthChanged:Connect(function(newHealth)
         local now = tick()
         
-        -- ตรวจจับกรณีเลือดลดลง (โดนดาเมจ)
         if newHealth < lastHealth then
             table.insert(damageTimestamps, now)
             
-            -- ลบค่า timestamp ที่เก่าเกินกรอบเวลา DAMAGE_TIME_WINDOW
             for i = #damageTimestamps, 1, -1 do
                 if now - damageTimestamps[i] > DAMAGE_TIME_WINDOW then
                     table.remove(damageTimestamps, i)
                 end
             end
             
-            -- เงื่อนไข: โดนรัวๆ (2 ครั้งขึ้นไป) + ไม่อยู่ใน Cooldown ของ Q
             if #damageTimestamps >= DAMAGE_HIT_THRESHOLD and (now - lastQEvadeTime >= Q_EVADE_COOLDOWN) then
                 lastQEvadeTime = now
-                damageTimestamps = {} -- รีเซ็ตคาวต์
+                damageTimestamps = {} 
                 
-                -- หยุดการสแปมโจมตีเป็นเวลา 1.5 วินาที ทันที!
                 pauseEndTime = now + DAMAGE_PAUSE_DURATION
-                
-                -- เรียกฟังก์ชันกด Q หลบ
                 triggerQEvade()
                 
                 local modeName = (currentModeKey == "Normal") and "NORMAL (DELAY 0.25s)" or "CAUTIOUS (INSTANT)"
@@ -244,7 +247,7 @@ local function updateBurstBar(count)
         BurstText.Text = "⚡ BURST x2 (PAUSE 0.25s)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
     elseif count >= 3 then
-        BurstText.Text = "💥 BURST x3 (RETREAT + ATTACK)"
+        BurstText.Text = "💥 BURST x3 (RETREAT 1.0s + ATTACK)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
     else
         BurstText.Text = "BURST COUNT: " .. count .. "/3"
@@ -450,11 +453,6 @@ local function onSoundTriggered(soundCategory)
         currentTargetRoot = bossRoot
     end
 
-    -- เมื่อตรวจพบเสียง Teleport ให้ถอยหลัง 0.1 วินาทีทันที!
-    if soundCategory == "TELEPORT" then
-        retreatBackwards(TELEPORT_RETREAT_DURATION)
-    end
-
     if soundCategory == "KICK_HIT" then
         pauseEndTime = now + KICK_HIT_PAUSE
         
@@ -477,18 +475,26 @@ local function onSoundTriggered(soundCategory)
     local currentBurstCount = #soundTimestamps
     updateBurstBar(currentBurstCount)
 
+    -- กรณีที่ Burst ครบ 3 ครั้ง
     if currentBurstCount >= PRESS_BURST_THRESHOLD then
         soundTimestamps = {}
+        updateBurstBar(0)
         
+        -- สั่งถอยหลัง 1.0 วินาทีแบบเน้นย้ำ (Retreat 1s)
         retreatBackwards(RETREAT_DURATION)
         pauseEndTime = now + BURST3_PAUSE_DURATION
         
-        StatusLabel.Text = "💥 BURST x3! RETREAT (PAUSE 0.5s -> ATTACK)"
+        StatusLabel.Text = "💥 BURST x3! RETREAT 1s (PAUSE 0.5s -> ATTACK)"
         StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
         if isHolding then
             HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
         end
         return
+    end
+
+    -- เสียง Teleport ทั่วไป (เมื่อไม่ใช่ Burst 3)
+    if soundCategory == "TELEPORT" and not isRetreating then
+        retreatBackwards(TELEPORT_RETREAT_DURATION)
     end
 
     if currentBurstCount == 2 then
