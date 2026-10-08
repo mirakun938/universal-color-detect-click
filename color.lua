@@ -37,8 +37,9 @@ local MODES = {
 local currentModeKey = "Normal"               
 local SPAM_SPEED = 0.03                       
 local FAR_DISTANCE = 15.0                     
-local GLIDE_DISTANCE = 10.0                   -- เพิ่มระยะถอยหลบเป็น 10 บล็อกเพื่อความปลอดภัย
-local GLIDE_DURATION = 0.12                   -- ความเร็วในการลากตัวหลบ (0.12 วินาที)
+local SAFE_DISTANCE_THRESHOLD = 12.0          -- ระยะปลอดภัย หากบอสวาร์ปมาใกล้กว่านี้จะเด้งหนีทันที
+local GLIDE_DISTANCE = 12.0                   -- ระยะพุ่งหลบ 12 บล็อก
+local GLIDE_DURATION = 0.10                   -- ความเร็วพุ่งหลบความเร็วสูง 0.10 วินาที
 
 local KICK_HIT_PAUSE = 0.5                    
 local BURST2_PAUSE_DURATION = 0.25            
@@ -48,7 +49,7 @@ local RETREAT_DURATION = 1.0
 local PRESS_BURST_THRESHOLD = 3               
 local BURST_TIME_WINDOW = 0.6                
 local SOUND_DEBOUNCE_TIME = 0.10             
-local LOCK_DURATION = 0.25                    -- ลดเวลาล็อคหน้าสั้นลง กันตัวสะบัดเข้าหาบอส
+local LOCK_DURATION = 0.15                    -- ลดเวลาล็อคเป้าให้สั้นมาก เพื่อไม่ให้ CFrame ดึงตัวสะบัด
 
 local DAMAGE_HIT_THRESHOLD = 2                
 local DAMAGE_TIME_WINDOW = 0.4                
@@ -56,7 +57,7 @@ local Q_EVADE_COOLDOWN = 1.0
 local DAMAGE_PAUSE_DURATION = 1.5             
 
 --------------------------------------------------------------------------------
--- ตัวแปรระบบ
+-- ตัวแปรระบบ Real-time Tracking
 --------------------------------------------------------------------------------
 local isHolding = false
 local isLocked = true
@@ -75,14 +76,18 @@ local damageTimestamps = {}
 local lastQEvadeTime = 0
 local lastHealth = 100
 
+-- ตัวแปร Real-time Boss Tracking
+local realTimeBossPos = Vector3.new(0, 0, 0)
+local realTimeBossRoot = nil
+
 local myChar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local myRoot = myChar:WaitForChild("HumanoidRootPart", 5)
 local myHumanoid = myChar:WaitForChild("Humanoid", 5)
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันค้นหาบอส/NPC
+-- ฟังก์ชันค้นหาและอัปเดตตำแหน่งบอส Real-time
 --------------------------------------------------------------------------------
-local function getBossRoot()
+local function updateRealTimeBoss()
     local miscFolder = Workspace:FindFirstChild("Misc")
     if not miscFolder then return nil, nil end
     local aiFolder = miscFolder:FindFirstChild("AI")
@@ -93,31 +98,55 @@ local function getBossRoot()
             local hum = child:FindFirstChildOfClass("Humanoid")
             local root = child:FindFirstChild("HumanoidRootPart") or child:FindFirstChildWhichIsA("BasePart")
             if hum and hum.Health > 0 and root then
+                realTimeBossRoot = root
+                realTimeBossPos = root.Position
                 return root, child.Name
             end
         end
     end
+    realTimeBossRoot = nil
     return nil, nil
 end
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันลอยลากถอยหลังตรงๆ ตามทิศด้านหลังตัวละคร (Strict Backwards)
+-- ฟังก์ชันพุ่งหลบ Real-time Dynamic Evade (คํานวณพิกัดบอสสดเพื่อดีดตัวออกห่าง)
 --------------------------------------------------------------------------------
-local function smoothGlideBackwards()
+local function realTimeDynamicEvade()
     if not myRoot or not myRoot.Parent then return end
 
     task.spawn(function()
         isGliding = true 
         
+        -- อัปเดตตำแหน่งเรียลไทม์ ณ วินาทีนี้
+        updateRealTimeBoss()
+        
         local myPos = myRoot.Position
+        local escapeDir = Vector3.new(0, 0, 0)
+
+        if realTimeBossRoot and realTimeBossRoot.Parent then
+            local bPos = realTimeBossRoot.Position
+            local dist = (myPos - bPos).Magnitude
+            
+            -- หากบอสอยู่ใกล้ตัวในระยะอันตราย หรือวาร์ปมาโผล่ข้างหลังใกล้ๆ
+            if dist <= SAFE_DISTANCE_THRESHOLD then
+                -- คำนวณทิศทางพุ่งหนีออกจากตำแหน่งบอสตรงๆ
+                local dirVector = (myPos - bPos)
+                escapeDir = Vector3.new(dirVector.X, 0, dirVector.Z)
+                if escapeDir.Magnitude > 0.001 then
+                    escapeDir = escapeDir.Unit
+                end
+            end
+        end
+
+        -- หากบอสไม่ได้อยู่ใกล้มาก หรือคำนวณทิศทางไม่ได้ ให้ถอยหลังตามทิศหน้าตัวเราเอง
+        if escapeDir.Magnitude < 0.1 then
+            local lookVector = myRoot.CFrame.LookVector
+            escapeDir = -Vector3.new(lookVector.X, 0, lookVector.Z).Unit
+        end
         
-        -- หาความทิศทางด้านหลังของตัวละครโดยตรง (ไม่สนตำแหน่งบอส)
-        local lookVector = myRoot.CFrame.LookVector
-        local backDir = -Vector3.new(lookVector.X, 0, lookVector.Z).Unit
-        
-        -- ตำแหน่งจุดหมายปลายทางถอยหลัง 10 บล็อก
-        local targetPosition = myPos + (backDir * GLIDE_DISTANCE)
-        local targetCFrame = CFrame.new(targetPosition, targetPosition + lookVector)
+        -- คำนวณตำแหน่งปลายทางหลบภัย 12 บล็อก
+        local targetPosition = myPos + (escapeDir * GLIDE_DISTANCE)
+        local targetCFrame = CFrame.new(targetPosition, targetPosition + myRoot.CFrame.LookVector)
         
         local tweenInfo = TweenInfo.new(
             GLIDE_DURATION,
@@ -442,11 +471,11 @@ NormalModeBtn.MouseButton1Click:Connect(function() setCombatMode("Normal") end)
 CautiousModeBtn.MouseButton1Click:Connect(function() setCombatMode("Cautious") end)
 
 --------------------------------------------------------------------------------
--- หมุนมุมมอง
+-- หมุนมุมมอง (ห้ามเปลี่ยน CFrame ขณะกำลังลอย Gliding)
 --------------------------------------------------------------------------------
 local function safeFaceTarget(targetRoot)
     if not myRoot or not myRoot.Parent or not targetRoot or not targetRoot.Parent then return end
-    if isGliding then return end -- ห้ามเปลี่ยนการมองขณะลอยลาก
+    if isGliding then return end -- ป้องกัน CFrame กระชากตัวละครขณะกำลังหลบ
     
     local targetPos = targetRoot.Position
     local currentCam = Workspace.CurrentCamera or Camera
@@ -470,16 +499,16 @@ local function onSoundTriggered(soundCategory)
     end
     lastSoundTriggerTime[soundCategory] = now
 
-    local bossRoot, bossName = getBossRoot()
+    local bossRoot, bossName = updateRealTimeBoss()
     if bossRoot then
         isLockingLook = true
         lockLookEndTime = now + LOCK_DURATION
         currentTargetRoot = bossRoot
     end
 
-    -- เมื่อได้ยินเสียงวาร์ป ให้ลอยลากถอยหลังตามทิศหน้าเราทันที
+    -- เมื่อตรวจพบเสียงวาร์ป สั่งพุ่งหลบ Real-time ทันที
     if soundCategory == "TELEPORT" then
-        smoothGlideBackwards()
+        realTimeDynamicEvade()
     end
 
     if soundCategory == "KICK_HIT" then
@@ -505,7 +534,7 @@ local function onSoundTriggered(soundCategory)
     updateBurstBar(currentBurstCount)
 
     if currentBurstCount >= PRESS_BURST_THRESHOLD then
-        soundTimestamps = {}
+        soundTimestampss = {}
         
         retreatWithS()
         pauseEndTime = now + BURST3_PAUSE_DURATION
@@ -543,7 +572,7 @@ local function onSoundTriggered(soundCategory)
 
     pauseEndTime = now + duration
 
-    StatusLabel.Text = "👀 GLIDE BACKWARDS 10B + ⚠️ " .. distanceType .. " PAUSE (" .. string.format("%.1f", duration) .. "s)"
+    StatusLabel.Text = "⚡ REALTIME EVADE + ⚠️ " .. distanceType .. " PAUSE (" .. string.format("%.1f", duration) .. "s)"
     StatusLabel.TextColor3 = (distanceType == "FAR") and Color3.fromRGB(255, 50, 50) or Color3.fromRGB(255, 150, 0)
     
     if isHolding then
@@ -590,8 +619,12 @@ SoundService.DescendantAdded:Connect(checkAndTrackSound)
 scanAllSounds()
 
 --------------------------------------------------------------------------------
--- Heartbeat Loop
+-- Real-time Tracking Loop (RenderStepped)
 --------------------------------------------------------------------------------
+RunService.RenderStepped:Connect(function()
+    updateRealTimeBoss() -- สแกนติดตามพิกัดบอสแบบเรียลไทม์ทุกเฟรม
+end)
+
 RunService.Heartbeat:Connect(function()
     local now = tick()
     
@@ -621,9 +654,9 @@ RunService.Heartbeat:Connect(function()
     end
 
     if not isHolding and now >= pauseEndTime and not isLockingLook and (now - lastQEvadeTime > 1.2) then
-        local bossRoot, bossName = getBossRoot()
+        local bossRoot, bossName = updateRealTimeBoss()
         if bossRoot then
-            StatusLabel.Text = "🎯 [" .. currentModeKey:upper() .. "] TRACKING: " .. bossName:upper()
+            StatusLabel.Text = "🎯 [" .. currentModeKey:upper() .. "] REALTIME TRACKING: " .. bossName:upper()
             StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
         else
             StatusLabel.Text = "🛡️ " .. currentModeKey:upper() .. " MODE READY"
