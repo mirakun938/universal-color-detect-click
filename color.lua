@@ -23,36 +23,35 @@ local MODES = {
         Name = "⚔️ Normal Mode (สู้ปกติ)",
         ClosePause = 0.6,
         FarPause = 0.8,
-        QDelay = 0.25
+        QDelay = 0.25 -- Normal Mode หน่วงเวลา 0.25 วินาทีก่อนกด Q
     },
     ["Cautious"] = {
         Name = "🛡️ Cautious Mode (สู้แบบระวัง)",
         ClosePause = 0.7,
         FarPause = 1.0,
-        QDelay = 0.0
+        QDelay = 0.0 -- Cautious Mode กด Q ทันที
     }
 }
 
 local currentModeKey = "Normal"               
 local SPAM_SPEED = 0.03                       
+local TARGET_DISTANCE = 7.0                   -- ระยะเป้าหมาย 7 บล็อก (Studs)
 local FAR_DISTANCE = 15.0                     
 
 local KICK_HIT_PAUSE = 0.5                    -- ระยะเวลา Pause เมื่อโดนท่าเตะ (วินาที)
 local BURST2_PAUSE_DURATION = 0.25            -- Burst 2 ให้ Pause 0.25 วินาที
 local BURST3_PAUSE_DURATION = 0.5             -- Burst 3 ให้ Pause 0.5 วินาทีก่อนเริ่มตี
-local RETREAT_DURATION = 1.0                  -- ระยะเวลาถอยหลังรวมสำหรับ Burst 3 (วินาที)
-local TELEPORT_RETREAT_DURATION = 0.1         -- ระยะเวลาถอยหลังเมื่อ Teleport (0.1 วินาที)
 
 local PRESS_BURST_THRESHOLD = 3               -- วาร์ป 3 ครั้ง = ถอยหลังสร้างระยะห่าง
 local BURST_TIME_WINDOW = 0.6                -- กรอบเวลานับเสียงรัว (วินาที)
-local SOUND_DEBOUNCE_TIME = 0.08             -- ปรับเวลาคูลดาวน์รับเสียงลงเล็กน้อยเพื่อจับ Burst ได้แม่นยำขึ้น
+local SOUND_DEBOUNCE_TIME = 0.10             -- คูลดาวน์กันนับเสียงเบิ้ล (วินาที)
 local LOCK_DURATION = 0.5                    
 
 -- ตั้งค่าระบบตรวจจับการโดนดาเมจ
-local DAMAGE_HIT_THRESHOLD = 2                
-local DAMAGE_TIME_WINDOW = 0.4                
-local Q_EVADE_COOLDOWN = 1.0                  
-local DAMAGE_PAUSE_DURATION = 1.5             
+local DAMAGE_HIT_THRESHOLD = 2                -- ต้องโดนดาเมจอย่างน้อย 2 ครั้ง (ห้ามกดเมื่อโดนครั้งแรก)
+local DAMAGE_TIME_WINDOW = 0.4                -- กรอบเวลานับการโดนรัวๆ (วินาที)
+local Q_EVADE_COOLDOWN = 1.0                  -- คูลดาวน์ปุ่ม Q หลบ (วินาที)
+local DAMAGE_PAUSE_DURATION = 1.5             -- หยุดสแปมโจมตี 1.5 วินาที เมื่อโดนดาเมจ
 
 --------------------------------------------------------------------------------
 -- ตัวแปรระบบ
@@ -72,34 +71,24 @@ local lastFaceTime = 0
 local damageTimestamps = {}
 local lastQEvadeTime = 0
 local lastHealth = 100
+local isSKeyDown = false
 
 local myChar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local myRoot = myChar:WaitForChild("HumanoidRootPart", 5)
 local myHumanoid = myChar:WaitForChild("Humanoid", 5)
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันจำลองการกด S ถอยหลัง (ปรับปรุงระบบป้องกันปุ่มค้าง/ขัดจังหวะ)
+-- ฟังก์ชันควบคุมการกดปุ่ม S ถอยหลัง
 --------------------------------------------------------------------------------
-local isRetreating = false
-local function retreatBackwards(duration)
-    task.defer(function()
-        isRetreating = true
-        -- สั่งปล่อยปุ่ม S ก่อน 1 รอบเพื่อ Reset สถานะปุ่ม
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
-        task.wait(0.01)
-        
-        -- กดปุ่ม S ค้างไว้ตามระยะเวลา duration
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.S, false, game)
-        task.wait(duration)
-        
-        -- ปล่อยปุ่ม S
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
-        isRetreating = false
-    end)
+local function setRetreating(state)
+    if isSKeyDown ~= state then
+        isSKeyDown = state
+        VirtualInputManager:SendKeyEvent(state, Enum.KeyCode.S, false, game)
+    end
 end
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันกดปุ่ม Q เพื่อหลบ
+-- ฟังก์ชันกดปุ่ม Q เพื่อหลบ (ตามเงื่อนไขของแต่ละโหมด)
 --------------------------------------------------------------------------------
 local function triggerQEvade()
     task.spawn(function()
@@ -140,7 +129,7 @@ local function setupHealthListener(char)
             
             if #damageTimestamps >= DAMAGE_HIT_THRESHOLD and (now - lastQEvadeTime >= Q_EVADE_COOLDOWN) then
                 lastQEvadeTime = now
-                damageTimestamps = {} 
+                damageTimestamps = {}
                 
                 pauseEndTime = now + DAMAGE_PAUSE_DURATION
                 triggerQEvade()
@@ -168,6 +157,7 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
     isLockingLook = false
     currentTargetRoot = nil
     damageTimestamps = {}
+    setRetreating(false)
     setupHealthListener(newChar)
 end)
 
@@ -247,7 +237,7 @@ local function updateBurstBar(count)
         BurstText.Text = "⚡ BURST x2 (PAUSE 0.25s)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
     elseif count >= 3 then
-        BurstText.Text = "💥 BURST x3 (RETREAT 1.0s + ATTACK)"
+        BurstText.Text = "💥 BURST x3 (KEEP DISTANCE 7 BLOCK)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
     else
         BurstText.Text = "BURST COUNT: " .. count .. "/3"
@@ -475,26 +465,16 @@ local function onSoundTriggered(soundCategory)
     local currentBurstCount = #soundTimestamps
     updateBurstBar(currentBurstCount)
 
-    -- กรณีที่ Burst ครบ 3 ครั้ง
     if currentBurstCount >= PRESS_BURST_THRESHOLD then
         soundTimestamps = {}
-        updateBurstBar(0)
-        
-        -- สั่งถอยหลัง 1.0 วินาทีแบบเน้นย้ำ (Retreat 1s)
-        retreatBackwards(RETREAT_DURATION)
         pauseEndTime = now + BURST3_PAUSE_DURATION
         
-        StatusLabel.Text = "💥 BURST x3! RETREAT 1s (PAUSE 0.5s -> ATTACK)"
+        StatusLabel.Text = "💥 BURST x3! (RETREAT TO 7 BLOCKS)"
         StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
         if isHolding then
             HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
         end
         return
-    end
-
-    -- เสียง Teleport ทั่วไป (เมื่อไม่ใช่ Burst 3)
-    if soundCategory == "TELEPORT" and not isRetreating then
-        retreatBackwards(TELEPORT_RETREAT_DURATION)
     end
 
     if currentBurstCount == 2 then
@@ -587,6 +567,19 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
+    -- ระบบคำนวณรักษาระยะห่าง 7 บล็อก (Studs)
+    local bossRoot, bossName = getBossRoot()
+    if bossRoot and myRoot and myRoot.Parent then
+        local dist = (bossRoot.Position - myRoot.Position).Magnitude
+        if dist < TARGET_DISTANCE then
+            setRetreating(true) -- ระยะใกล้กว่า 7 บล็อก ให้กด S ถอยหลัง
+        else
+            setRetreating(false) -- ระยะห่างพอแล้ว ให้หยุดถอย
+        end
+    else
+        setRetreating(false)
+    end
+
     if isLockingLook then
         if now < lockLookEndTime and currentTargetRoot and currentTargetRoot.Parent then
             if now - lastFaceTime >= 0.02 then
@@ -600,7 +593,6 @@ RunService.Heartbeat:Connect(function()
     end
 
     if not isHolding and now >= pauseEndTime and not isLockingLook and (now - lastQEvadeTime > 1.2) then
-        local bossRoot, bossName = getBossRoot()
         if bossRoot then
             StatusLabel.Text = "🎯 [" .. currentModeKey:upper() .. "] TRACKING: " .. bossName:upper()
             StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
