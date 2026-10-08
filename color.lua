@@ -35,15 +35,15 @@ local MODES = {
 
 local currentModeKey = "Normal"               
 local SPAM_SPEED = 0.03                       
-local TARGET_DISTANCE = 7.0                   -- ระยะเป้าหมาย 7 บล็อก (Studs)
+local SAFE_TELEPORT_DIST = 8.0                -- ระยะ Teleport ห่างบอส 8 บล็อก
 local FAR_DISTANCE = 15.0                     
 
 local KICK_HIT_PAUSE = 0.5                    -- ระยะเวลา Pause เมื่อโดนท่าเตะ (วินาที)
 local BURST2_PAUSE_DURATION = 0.25            -- Burst 2 ให้ Pause 0.25 วินาที
 local BURST3_PAUSE_DURATION = 0.5             -- Burst 3 ให้ Pause 0.5 วินาทีก่อนเริ่มตี
-local RETREAT_DURATION = 1.0                  -- ระยะเวลาถอยหลังบังคับสำหรับ Burst 3 (1.0 วินาที)
+local RETREAT_DURATION = 1.0                  -- Burst 3 ให้กด S ถอยหลัง 1.0 วินาที
 
-local PRESS_BURST_THRESHOLD = 3               -- วาร์ป 3 ครั้ง = Burst 3
+local PRESS_BURST_THRESHOLD = 3               -- วาร์ป 3 ครั้ง = ถอยหลังสร้างระยะห่าง
 local BURST_TIME_WINDOW = 0.6                -- กรอบเวลานับเสียงรัว (วินาที)
 local SOUND_DEBOUNCE_TIME = 0.10             -- คูลดาวน์กันนับเสียงเบิ้ล (วินาที)
 local LOCK_DURATION = 0.5                    
@@ -60,7 +60,6 @@ local DAMAGE_PAUSE_DURATION = 1.5             -- หยุดสแปมโจ�
 local isHolding = false
 local isLocked = true
 local pauseEndTime = 0
-local forcedRetreatEndTime = 0                -- ตัวแปรล็อกเวลาการบังคับถอยหลัง (Burst 3)
 local soundTimestamps = {}
 local trackedSounds = {}
 local lastSoundTriggerTime = {}
@@ -73,24 +72,61 @@ local lastFaceTime = 0
 local damageTimestamps = {}
 local lastQEvadeTime = 0
 local lastHealth = 100
-local isSKeyDown = false
 
 local myChar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local myRoot = myChar:WaitForChild("HumanoidRootPart", 5)
 local myHumanoid = myChar:WaitForChild("Humanoid", 5)
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันควบคุมการกดปุ่ม S ถอยหลัง
+-- ฟังก์ชันจำลองการกด S ถอยหลัง (สำหรับ Burst 3)
 --------------------------------------------------------------------------------
-local function setRetreating(state)
-    if isSKeyDown ~= state then
-        isSKeyDown = state
-        VirtualInputManager:SendKeyEvent(state, Enum.KeyCode.S, false, game)
-    end
+local function retreatBackwards(duration)
+    task.spawn(function()
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.S, false, game)
+        task.wait(duration)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
+    end)
 end
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันกดปุ่ม Q เพื่อหลบ (ตามเงื่อนไขของแต่ละโหมด)
+-- ฟังก์ชัน Teleport ปลอดภัย (เช็กพื้นกันลอย/ตกแมพ)
+--------------------------------------------------------------------------------
+local function safeTeleportAway(bossRoot)
+    if not myRoot or not myRoot.Parent or not bossRoot or not bossRoot.Parent then return end
+
+    -- คำนวณทิศทางถอยออกจากบอส
+    local dir = (myRoot.Position - bossRoot.Position)
+    dir = Vector3.new(dir.X, 0, dir.Z)
+
+    if dir.Magnitude == 0 then
+        dir = -bossRoot.CFrame.LookVector
+        dir = Vector3.new(dir.X, 0, dir.Z)
+    end
+
+    dir = dir.Unit
+    local targetPos = bossRoot.Position + (dir * SAFE_TELEPORT_DIST)
+
+    -- ใช้ Raycast ยิงลงพื้นเพื่อหาความสูงระดับเดียวกับพื้นดินจริง
+    local rayOrigin = targetPos + Vector3.new(0, 10, 0)
+    local rayDirection = Vector3.new(0, -30, 0)
+
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterAncestorsClips = {myChar}
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+
+    local raycastResult = Workspace:Raycast(rayOrigin, rayDirection, raycastParams)
+
+    local finalY = bossRoot.Position.Y
+    if raycastResult then
+        finalY = raycastResult.Position.Y + (myRoot.Size.Y / 2) + 0.5
+    end
+
+    local finalPos = Vector3.new(targetPos.X, finalY, targetPos.Z)
+    myRoot.CFrame = CFrame.lookAt(finalPos, Vector3.new(bossRoot.Position.X, finalPos.Y, bossRoot.Position.Z))
+end
+
+--------------------------------------------------------------------------------
+-- ฟังก์ชันกดปุ่ม Q เพื่อหลบ
 --------------------------------------------------------------------------------
 local function triggerQEvade()
     task.spawn(function()
@@ -159,8 +195,6 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
     isLockingLook = false
     currentTargetRoot = nil
     damageTimestamps = {}
-    forcedRetreatEndTime = 0
-    setRetreating(false)
     setupHealthListener(newChar)
 end)
 
@@ -240,7 +274,7 @@ local function updateBurstBar(count)
         BurstText.Text = "⚡ BURST x2 (PAUSE 0.25s)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
     elseif count >= 3 then
-        BurstText.Text = "💥 BURST x3 (FORCED RETREAT 1.0s)"
+        BurstText.Text = "💥 BURST x3 (RETREAT 1.0s + ATTACK)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
     else
         BurstText.Text = "BURST COUNT: " .. count .. "/3"
@@ -446,6 +480,15 @@ local function onSoundTriggered(soundCategory)
         currentTargetRoot = bossRoot
     end
 
+    -- 1. กรณีเสียง TELEPORT: เช็กว่าอยู่ในระยะ <= 8 บล็อกหรือไม่ หากใช่ให้ Teleport ถอยตั้งหลักทันที
+    if soundCategory == "TELEPORT" and bossRoot and myRoot and myRoot.Parent then
+        local currentDist = (bossRoot.Position - myRoot.Position).Magnitude
+        if currentDist <= SAFE_TELEPORT_DIST then
+            safeTeleportAway(bossRoot)
+        end
+    end
+
+    -- 2. กรณีเสียง KICK_HIT: หยุดการโจมตี 0.5s ตามเดิม (ไม่ Teleport)
     if soundCategory == "KICK_HIT" then
         pauseEndTime = now + KICK_HIT_PAUSE
         
@@ -468,13 +511,14 @@ local function onSoundTriggered(soundCategory)
     local currentBurstCount = #soundTimestamps
     updateBurstBar(currentBurstCount)
 
-    -- เงื่อนไข BURST 3: สั่งให้บังคับถอยหลัง 1.0 วินาทีแน่นอน!
+    -- 3. กรณี Burst 3 ครั้ง: ถอยหลัง (กด S) 1 วินาทีเหมือนเดิม
     if currentBurstCount >= PRESS_BURST_THRESHOLD then
         soundTimestamps = {}
-        forcedRetreatEndTime = now + RETREAT_DURATION -- ตั้งเวลาล็อกถอยหลัง 1.0 วินาที
-        pauseEndTime = now + RETREAT_DURATION + BURST3_PAUSE_DURATION
         
-        StatusLabel.Text = "💥 BURST x3! FORCED RETREAT 1.0s"
+        retreatBackwards(RETREAT_DURATION)
+        pauseEndTime = now + BURST3_PAUSE_DURATION
+        
+        StatusLabel.Text = "💥 BURST x3! RETREAT (PAUSE 0.5s -> ATTACK)"
         StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
         if isHolding then
             HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
@@ -572,24 +616,6 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- ระบบจัดการการถอยหลัง (Retreat Logic)
-    local bossRoot, bossName = getBossRoot()
-    
-    if now < forcedRetreatEndTime then
-        -- 1. กรณีอยู่ในช่วงเวลาบังคับถอยหลังของ Burst 3 (1.0 วินาที)
-        setRetreating(true)
-    elseif bossRoot and myRoot and myRoot.Parent then
-        -- 2. กรณี Distance Keep 7 บล็อก
-        local dist = (bossRoot.Position - myRoot.Position).Magnitude
-        if dist < TARGET_DISTANCE then
-            setRetreating(true) -- อยู่ใกล้กว่า 7 บล็อก -> ถอยหลัง
-        else
-            setRetreating(false) -- เกินระยะ 7 บล็อกแล้ว -> ยกเลิกการถอยหลังทันที!
-        end
-    else
-        setRetreating(false)
-    end
-
     if isLockingLook then
         if now < lockLookEndTime and currentTargetRoot and currentTargetRoot.Parent then
             if now - lastFaceTime >= 0.02 then
@@ -603,6 +629,7 @@ RunService.Heartbeat:Connect(function()
     end
 
     if not isHolding and now >= pauseEndTime and not isLockingLook and (now - lastQEvadeTime > 1.2) then
+        local bossRoot, bossName = getBossRoot()
         if bossRoot then
             StatusLabel.Text = "🎯 [" .. currentModeKey:upper() .. "] TRACKING: " .. bossName:upper()
             StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
