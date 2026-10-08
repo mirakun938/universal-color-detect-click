@@ -24,13 +24,13 @@ local MODES = {
         Name = "⚔️ Normal Mode (สู้ปกติ)",
         ClosePause = 0.6,
         FarPause = 0.8,
-        QDelay = 0.25 -- Normal Mode หน่วงเวลา 0.25 วินาทีก่อนกด Q
+        QDelay = 0.25
     },
     ["Cautious"] = {
         Name = "🛡️ Cautious Mode (สู้แบบระวัง)",
         ClosePause = 0.7,
         FarPause = 1.0,
-        QDelay = 0.0 -- Cautious Mode กด Q ทันที
+        QDelay = 0.0
     }
 }
 
@@ -38,23 +38,22 @@ local currentModeKey = "Normal"
 local SPAM_SPEED = 0.03                       
 local FAR_DISTANCE = 15.0                     
 local GLIDE_DISTANCE = 8.0                    -- ระยะลอยลากถอยหลัง 8 บล็อก
-local GLIDE_DURATION = 0.15                   -- ความเร็วในการลากตัวหลบ (วินาที)
+local GLIDE_DURATION = 0.12                   -- ปรับความเร็วลากหลบให้เร็วขึ้นเป็น 0.12s
 
-local KICK_HIT_PAUSE = 0.5                    -- ระยะเวลา Pause เมื่อโดนท่าเตะ (วินาที)
-local BURST2_PAUSE_DURATION = 0.25            -- Burst 2 ให้ Pause 0.25 วินาที
-local BURST3_PAUSE_DURATION = 0.5             -- Burst 3 ให้ Pause 0.5 วินาทีก่อนเริ่มตี
-local RETREAT_DURATION = 1.0                  -- ระยะเวลาถอยหลังรวมสำหรับ Burst 3 (วินาที)
+local KICK_HIT_PAUSE = 0.5                    
+local BURST2_PAUSE_DURATION = 0.25            
+local BURST3_PAUSE_DURATION = 0.5             
+local RETREAT_DURATION = 1.0                  
 
-local PRESS_BURST_THRESHOLD = 3               -- วาร์ป 3 ครั้ง = ถอยหลังสร้างระยะห่าง
-local BURST_TIME_WINDOW = 0.6                -- กรอบเวลานับเสียงรัว (วินาที)
-local SOUND_DEBOUNCE_TIME = 0.10             -- คูลดาวน์กันนับเสียงเบิ้ล (วินาที)
-local LOCK_DURATION = 0.5                    
+local PRESS_BURST_THRESHOLD = 3               
+local BURST_TIME_WINDOW = 0.6                
+local SOUND_DEBOUNCE_TIME = 0.10             
+local LOCK_DURATION = 0.35                    -- ลดระยะเวลาล็อคหน้าเพื่อกันตัวถูกดึงกะทันหัน
 
--- ตั้งค่าระบบตรวจจับการโดนดาเมจ
-local DAMAGE_HIT_THRESHOLD = 2                -- ต้องโดนดาเมจอย่างน้อย 2 ครั้ง (ห้ามกดเมื่อโดนครั้งแรก)
-local DAMAGE_TIME_WINDOW = 0.4                -- กรอบเวลานับการโดนรัวๆ (วินาที)
-local Q_EVADE_COOLDOWN = 1.0                  -- คูลดาวน์ปุ่ม Q หลบ (วินาที)
-local DAMAGE_PAUSE_DURATION = 1.5             -- หยุดสแปมโจมตี 1.5 วินาที เมื่อโดนดาเมจ
+local DAMAGE_HIT_THRESHOLD = 2                
+local DAMAGE_TIME_WINDOW = 0.4                
+local Q_EVADE_COOLDOWN = 1.0                  
+local DAMAGE_PAUSE_DURATION = 1.5             
 
 --------------------------------------------------------------------------------
 -- ตัวแปรระบบ
@@ -70,6 +69,7 @@ local isLockingLook = false
 local lockLookEndTime = 0
 local currentTargetRoot = nil
 local lastFaceTime = 0
+local isGliding = false -- สถานะป้องกันการดึง CFrame ขณะลอยลาก
 
 local damageTimestamps = {}
 local lastQEvadeTime = 0
@@ -101,38 +101,43 @@ local function getBossRoot()
 end
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันลอยลากถอยหลัง 8 บล็อก (ระนาบเดียวกัน ไม่เพิ่มความสูง กันตกแมพ/ขาหัก)
+-- ฟังก์ชันลอยลากถอยหลัง 8 บล็อก (แก้ไขไม่ให้โดนตัวดึงกระชากกลับไปใกล้บอส)
 --------------------------------------------------------------------------------
 local function smoothGlideAway(bossRoot)
     if not myRoot or not myRoot.Parent or not bossRoot or not bossRoot.Parent then return end
 
     task.spawn(function()
-        -- คำนวณทิศทางถอยออกจากบอสในแนวระนาบ (ไม่นำแกน Y มาคิด)
+        isGliding = true -- เปิดสถานะกำลังลอยลาก
+        
         local myPos = myRoot.Position
         local bossPos = bossRoot.Position
         
+        -- คำนวณทิศทางถอยออกจากตำแหน่งบอสแบบระนาบราบ
         local dir = (myPos - bossPos)
-        dir = Vector3.new(dir.X, 0, dir.Z) -- ล็อคแกน Y เป็น 0
+        dir = Vector3.new(dir.X, 0, dir.Z)
         
-        if dir.Magnitude == 0 then
+        if dir.Magnitude < 0.1 then
             dir = -myRoot.CFrame.LookVector
             dir = Vector3.new(dir.X, 0, dir.Z)
         end
         
         dir = dir.Unit
         
-        -- ตำแหน่งปลายทางคงระดับ Y เท่าเดิมเป๊ะๆ
+        -- กำหนดตำแหน่งจุดหมายปลายทาง 8 บล็อก
         local targetPosition = myPos + (dir * GLIDE_DISTANCE)
         local targetCFrame = CFrame.new(targetPosition, targetPosition + myRoot.CFrame.LookVector)
         
         local tweenInfo = TweenInfo.new(
             GLIDE_DURATION,
-            Enum.EasingStyle.Quad,
+            Enum.EasingStyle.Cubic,
             Enum.EasingDirection.Out
         )
         
         local tween = TweenService:Create(myRoot, tweenInfo, {CFrame = targetCFrame})
         tween:Play()
+        tween.Completed:Wait()
+        
+        isGliding = false -- ทำงานเสร็จสิ้น ปลดล็อกสถานะ
     end)
 end
 
@@ -215,6 +220,7 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
     myRoot = newChar:WaitForChild("HumanoidRootPart", 5)
     Camera = Workspace.CurrentCamera
     isLockingLook = false
+    isGliding = false
     currentTargetRoot = nil
     damageTimestamps = {}
     setupHealthListener(newChar)
@@ -233,7 +239,6 @@ ScreenGui.Name = "ComboSpamMenuGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
--- 1. แถบแสดงสถานะหลัก
 local StatusLabel = Instance.new("TextLabel")
 local StatusCorner = Instance.new("UICorner")
 
@@ -252,7 +257,6 @@ StatusLabel.Font = Enum.Font.SourceSansBold
 StatusCorner.CornerRadius = UDim.new(0, 8)
 StatusCorner.Parent = StatusLabel
 
--- 1.5 หลอดสะสมค่า Burst Progress Bar
 local BurstBarBg = Instance.new("Frame")
 local BurstBarBgCorner = Instance.new("UICorner")
 local BurstBarFill = Instance.new("Frame")
@@ -304,7 +308,6 @@ local function updateBurstBar(count)
     end
 end
 
--- 2. ปุ่มสแปมหลัก (HOLD TO SPAM)
 local HoldButton = Instance.new("TextButton")
 local HoldCorner = Instance.new("UICorner")
 
@@ -325,7 +328,6 @@ HoldButton.Draggable = not isLocked
 HoldCorner.CornerRadius = UDim.new(0, 45)
 HoldCorner.Parent = HoldButton
 
--- 3. ปุ่ม ล็อค/ปลดล็อก
 local LockButton = Instance.new("TextButton")
 local LockCorner = Instance.new("UICorner")
 
@@ -352,7 +354,6 @@ LockButton.MouseButton1Click:Connect(function()
     LockButton.BackgroundColor3 = isLocked and Color3.fromRGB(40, 40, 40) or Color3.fromRGB(200, 120, 0)
 end)
 
--- 4. ปุ่มเปิด/ปิด Main Menu
 local MenuToggleButton = Instance.new("TextButton")
 local MenuToggleCorner = Instance.new("UICorner")
 
@@ -371,7 +372,6 @@ MenuToggleButton.Font = Enum.Font.SourceSansBold
 MenuToggleCorner.CornerRadius = UDim.new(0, 6)
 MenuToggleCorner.Parent = MenuToggleButton
 
--- 5. หน้าต่าง Main Menu Frame
 local MainMenuFrame = Instance.new("Frame")
 local MenuCorner = Instance.new("UICorner")
 local MenuTitle = Instance.new("TextLabel")
@@ -450,10 +450,11 @@ NormalModeBtn.MouseButton1Click:Connect(function() setCombatMode("Normal") end)
 CautiousModeBtn.MouseButton1Click:Connect(function() setCombatMode("Cautious") end)
 
 --------------------------------------------------------------------------------
--- หมุนมุมมอง
+-- หมุนมุมมอง (หันเฉพาะกล้อง ไม่กระชาก CFrame ตัวละครเมื่อกำลัง Gliding)
 --------------------------------------------------------------------------------
 local function safeFaceTarget(targetRoot)
     if not myRoot or not myRoot.Parent or not targetRoot or not targetRoot.Parent then return end
+    if isGliding then return end -- ป้องกันไม่ให้ตัวถูกกระชากดึงขณะลอยลาก
     
     local targetPos = targetRoot.Position
     local currentCam = Workspace.CurrentCamera or Camera
@@ -484,7 +485,6 @@ local function onSoundTriggered(soundCategory)
         currentTargetRoot = bossRoot
     end
 
-    -- หากตรวจพบเสียง Teleport (3 เสียงวาร์ป) ให้ลอยลากถอยหลัง 8 บล็อก
     if soundCategory == "TELEPORT" and bossRoot then
         smoothGlideAway(bossRoot)
     end
@@ -514,7 +514,6 @@ local function onSoundTriggered(soundCategory)
     if currentBurstCount >= PRESS_BURST_THRESHOLD then
         soundTimestamps = {}
         
-        -- Burst 3 ครั้ง สั่งกด S ถอยหลังเหมือนเดิม
         retreatWithS()
         pauseEndTime = now + BURST3_PAUSE_DURATION
         
