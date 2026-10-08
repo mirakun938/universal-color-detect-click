@@ -37,8 +37,8 @@ local MODES = {
 local currentModeKey = "Normal"               
 local SPAM_SPEED = 0.03                       
 local FAR_DISTANCE = 15.0                     
-local GLIDE_DISTANCE = 8.0                    -- ระยะลอยลากถอยหลัง 8 บล็อก
-local GLIDE_DURATION = 0.12                   -- ปรับความเร็วลากหลบให้เร็วขึ้นเป็น 0.12s
+local GLIDE_DISTANCE = 10.0                   -- เพิ่มระยะถอยหลบเป็น 10 บล็อกเพื่อความปลอดภัย
+local GLIDE_DURATION = 0.12                   -- ความเร็วในการลากตัวหลบ (0.12 วินาที)
 
 local KICK_HIT_PAUSE = 0.5                    
 local BURST2_PAUSE_DURATION = 0.25            
@@ -48,7 +48,7 @@ local RETREAT_DURATION = 1.0
 local PRESS_BURST_THRESHOLD = 3               
 local BURST_TIME_WINDOW = 0.6                
 local SOUND_DEBOUNCE_TIME = 0.10             
-local LOCK_DURATION = 0.35                    -- ลดระยะเวลาล็อคหน้าเพื่อกันตัวถูกดึงกะทันหัน
+local LOCK_DURATION = 0.25                    -- ลดเวลาล็อคหน้าสั้นลง กันตัวสะบัดเข้าหาบอส
 
 local DAMAGE_HIT_THRESHOLD = 2                
 local DAMAGE_TIME_WINDOW = 0.4                
@@ -69,7 +69,7 @@ local isLockingLook = false
 local lockLookEndTime = 0
 local currentTargetRoot = nil
 local lastFaceTime = 0
-local isGliding = false -- สถานะป้องกันการดึง CFrame ขณะลอยลาก
+local isGliding = false 
 
 local damageTimestamps = {}
 local lastQEvadeTime = 0
@@ -101,31 +101,23 @@ local function getBossRoot()
 end
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันลอยลากถอยหลัง 8 บล็อก (แก้ไขไม่ให้โดนตัวดึงกระชากกลับไปใกล้บอส)
+-- ฟังก์ชันลอยลากถอยหลังตรงๆ ตามทิศด้านหลังตัวละคร (Strict Backwards)
 --------------------------------------------------------------------------------
-local function smoothGlideAway(bossRoot)
-    if not myRoot or not myRoot.Parent or not bossRoot or not bossRoot.Parent then return end
+local function smoothGlideBackwards()
+    if not myRoot or not myRoot.Parent then return end
 
     task.spawn(function()
-        isGliding = true -- เปิดสถานะกำลังลอยลาก
+        isGliding = true 
         
         local myPos = myRoot.Position
-        local bossPos = bossRoot.Position
         
-        -- คำนวณทิศทางถอยออกจากตำแหน่งบอสแบบระนาบราบ
-        local dir = (myPos - bossPos)
-        dir = Vector3.new(dir.X, 0, dir.Z)
+        -- หาความทิศทางด้านหลังของตัวละครโดยตรง (ไม่สนตำแหน่งบอส)
+        local lookVector = myRoot.CFrame.LookVector
+        local backDir = -Vector3.new(lookVector.X, 0, lookVector.Z).Unit
         
-        if dir.Magnitude < 0.1 then
-            dir = -myRoot.CFrame.LookVector
-            dir = Vector3.new(dir.X, 0, dir.Z)
-        end
-        
-        dir = dir.Unit
-        
-        -- กำหนดตำแหน่งจุดหมายปลายทาง 8 บล็อก
-        local targetPosition = myPos + (dir * GLIDE_DISTANCE)
-        local targetCFrame = CFrame.new(targetPosition, targetPosition + myRoot.CFrame.LookVector)
+        -- ตำแหน่งจุดหมายปลายทางถอยหลัง 10 บล็อก
+        local targetPosition = myPos + (backDir * GLIDE_DISTANCE)
+        local targetCFrame = CFrame.new(targetPosition, targetPosition + lookVector)
         
         local tweenInfo = TweenInfo.new(
             GLIDE_DURATION,
@@ -137,7 +129,7 @@ local function smoothGlideAway(bossRoot)
         tween:Play()
         tween.Completed:Wait()
         
-        isGliding = false -- ทำงานเสร็จสิ้น ปลดล็อกสถานะ
+        isGliding = false 
     end)
 end
 
@@ -450,11 +442,11 @@ NormalModeBtn.MouseButton1Click:Connect(function() setCombatMode("Normal") end)
 CautiousModeBtn.MouseButton1Click:Connect(function() setCombatMode("Cautious") end)
 
 --------------------------------------------------------------------------------
--- หมุนมุมมอง (หันเฉพาะกล้อง ไม่กระชาก CFrame ตัวละครเมื่อกำลัง Gliding)
+-- หมุนมุมมอง
 --------------------------------------------------------------------------------
 local function safeFaceTarget(targetRoot)
     if not myRoot or not myRoot.Parent or not targetRoot or not targetRoot.Parent then return end
-    if isGliding then return end -- ป้องกันไม่ให้ตัวถูกกระชากดึงขณะลอยลาก
+    if isGliding then return end -- ห้ามเปลี่ยนการมองขณะลอยลาก
     
     local targetPos = targetRoot.Position
     local currentCam = Workspace.CurrentCamera or Camera
@@ -485,8 +477,9 @@ local function onSoundTriggered(soundCategory)
         currentTargetRoot = bossRoot
     end
 
-    if soundCategory == "TELEPORT" and bossRoot then
-        smoothGlideAway(bossRoot)
+    -- เมื่อได้ยินเสียงวาร์ป ให้ลอยลากถอยหลังตามทิศหน้าเราทันที
+    if soundCategory == "TELEPORT" then
+        smoothGlideBackwards()
     end
 
     if soundCategory == "KICK_HIT" then
@@ -550,7 +543,7 @@ local function onSoundTriggered(soundCategory)
 
     pauseEndTime = now + duration
 
-    StatusLabel.Text = "👀 GLIDE 8 BLOCKS + ⚠️ " .. distanceType .. " PAUSE (" .. string.format("%.1f", duration) .. "s)"
+    StatusLabel.Text = "👀 GLIDE BACKWARDS 10B + ⚠️ " .. distanceType .. " PAUSE (" .. string.format("%.1f", duration) .. "s)"
     StatusLabel.TextColor3 = (distanceType == "FAR") and Color3.fromRGB(255, 50, 50) or Color3.fromRGB(255, 150, 0)
     
     if isHolding then
