@@ -40,7 +40,8 @@ local FAR_DISTANCE = 15.0
 
 local KICK_HIT_PAUSE = 0.5                    -- ระยะเวลา Pause เมื่อโดนท่าเตะ (วินาที)
 local BURST2_PAUSE_DURATION = 0.25            -- Burst 2 ให้ Pause 0.25 วินาที
-local BURST3_PAUSE_DURATION = 0.5             -- Burst 3 ให้ Pause 0.5 วินาทีก่อนเริ่มตี
+local BURST3_PAUSE_DURATION = 1.5             -- Burst 3 Pause 1.5 วินาที
+local BURST3_RETREAT_DURATION = 1.5           -- Burst 3 บังคับถอยหลัง 1.5 วินาที
 
 local PRESS_BURST_THRESHOLD = 3               -- วาร์ป 3 ครั้ง = ถอยหลังสร้างระยะห่าง
 local BURST_TIME_WINDOW = 0.6                -- กรอบเวลานับเสียงรัว (วินาที)
@@ -72,6 +73,7 @@ local damageTimestamps = {}
 local lastQEvadeTime = 0
 local lastHealth = 100
 local isSKeyDown = false
+local isForcedRetreating = false -- ตัวแปรเช็กว่ากำลังโดนบังคับถอยหลังอยู่หรือไม่
 
 local myChar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local myRoot = myChar:WaitForChild("HumanoidRootPart", 5)
@@ -85,6 +87,17 @@ local function setRetreating(state)
         isSKeyDown = state
         VirtualInputManager:SendKeyEvent(state, Enum.KeyCode.S, false, game)
     end
+end
+
+-- ฟังก์ชันบังคับถอยหลังแบบตั้งเวลา (สำหรับ Burst 3)
+local function forceRetreat(duration)
+    task.spawn(function()
+        isForcedRetreating = true
+        setRetreating(true)
+        task.wait(duration)
+        setRetreating(false)
+        isForcedRetreating = false
+    end)
 end
 
 --------------------------------------------------------------------------------
@@ -157,6 +170,7 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
     isLockingLook = false
     currentTargetRoot = nil
     damageTimestamps = {}
+    isForcedRetreating = false
     setRetreating(false)
     setupHealthListener(newChar)
 end)
@@ -237,7 +251,7 @@ local function updateBurstBar(count)
         BurstText.Text = "⚡ BURST x2 (PAUSE 0.25s)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
     elseif count >= 3 then
-        BurstText.Text = "💥 BURST x3 (KEEP DISTANCE 7 BLOCK)"
+        BurstText.Text = "💥 BURST x3 (RETREAT 1.5s)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
     else
         BurstText.Text = "BURST COUNT: " .. count .. "/3"
@@ -465,11 +479,13 @@ local function onSoundTriggered(soundCategory)
     local currentBurstCount = #soundTimestamps
     updateBurstBar(currentBurstCount)
 
+    -- Burst 3: ถอยหลัง 1.5s และ Pause 1.5s
     if currentBurstCount >= PRESS_BURST_THRESHOLD then
         soundTimestamps = {}
         pauseEndTime = now + BURST3_PAUSE_DURATION
+        forceRetreat(BURST3_RETREAT_DURATION) -- สั่งบังคับถอยหลัง 1.5 วินาที
         
-        StatusLabel.Text = "💥 BURST x3! (RETREAT TO 7 BLOCKS)"
+        StatusLabel.Text = "💥 BURST x3! RETREAT 1.5s"
         StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
         if isHolding then
             HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
@@ -567,17 +583,19 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- ระบบคำนวณรักษาระยะห่าง 7 บล็อก (Studs)
-    local bossRoot, bossName = getBossRoot()
-    if bossRoot and myRoot and myRoot.Parent then
-        local dist = (bossRoot.Position - myRoot.Position).Magnitude
-        if dist < TARGET_DISTANCE then
-            setRetreating(true) -- ระยะใกล้กว่า 7 บล็อก ให้กด S ถอยหลัง
+    -- ระบบควบคุมระยะห่าง 7 บล็อก (จะทำงานเมื่อไม่อยู่ในสถานะบังคับถอย Burst 3)
+    if not isForcedRetreating then
+        local bossRoot, bossName = getBossRoot()
+        if bossRoot and myRoot and myRoot.Parent then
+            local dist = (bossRoot.Position - myRoot.Position).Magnitude
+            if dist < TARGET_DISTANCE then
+                setRetreating(true)  -- ระยะใกล้น้อยกว่า 7 บล็อก -> ให้กด S ถอยหลัง
+            else
+                setRetreating(false) -- ระยะมากกว่าหรือเท่ากับ 7 บล็อก -> ยกเลิกการถอยหลังทันที!
+            end
         else
-            setRetreating(false) -- ระยะห่างพอแล้ว ให้หยุดถอย
+            setRetreating(false)
         end
-    else
-        setRetreating(false)
     end
 
     if isLockingLook then
@@ -593,6 +611,7 @@ RunService.Heartbeat:Connect(function()
     end
 
     if not isHolding and now >= pauseEndTime and not isLockingLook and (now - lastQEvadeTime > 1.2) then
+        local bossRoot, bossName = getBossRoot()
         if bossRoot then
             StatusLabel.Text = "🎯 [" .. currentModeKey:upper() .. "] TRACKING: " .. bossName:upper()
             StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
