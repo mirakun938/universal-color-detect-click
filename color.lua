@@ -4,6 +4,7 @@ local Workspace = game:GetService("Workspace")
 local SoundService = game:GetService("SoundService")
 local RunService = game:GetService("RunService")
 local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
@@ -35,13 +36,14 @@ local MODES = {
 
 local currentModeKey = "Normal"               
 local SPAM_SPEED = 0.03                       
-local SAFE_TELEPORT_DIST = 8.0                -- ระยะ Teleport ห่างบอส 8 บล็อก
 local FAR_DISTANCE = 15.0                     
+local GLIDE_DISTANCE = 8.0                    -- ระยะลอยลากถอยหลัง 8 บล็อก
+local GLIDE_DURATION = 0.15                   -- ความเร็วในการลากตัวหลบ (วินาที)
 
 local KICK_HIT_PAUSE = 0.5                    -- ระยะเวลา Pause เมื่อโดนท่าเตะ (วินาที)
 local BURST2_PAUSE_DURATION = 0.25            -- Burst 2 ให้ Pause 0.25 วินาที
 local BURST3_PAUSE_DURATION = 0.5             -- Burst 3 ให้ Pause 0.5 วินาทีก่อนเริ่มตี
-local RETREAT_DURATION = 1.0                  -- Burst 3 ให้กด S ถอยหลัง 1.0 วินาที
+local RETREAT_DURATION = 1.0                  -- ระยะเวลาถอยหลังรวมสำหรับ Burst 3 (วินาที)
 
 local PRESS_BURST_THRESHOLD = 3               -- วาร์ป 3 ครั้ง = ถอยหลังสร้างระยะห่าง
 local BURST_TIME_WINDOW = 0.6                -- กรอบเวลานับเสียงรัว (วินาที)
@@ -78,51 +80,71 @@ local myRoot = myChar:WaitForChild("HumanoidRootPart", 5)
 local myHumanoid = myChar:WaitForChild("Humanoid", 5)
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันจำลองการกด S ถอยหลัง (สำหรับ Burst 3)
+-- ฟังก์ชันค้นหาบอส/NPC
 --------------------------------------------------------------------------------
-local function retreatBackwards(duration)
+local function getBossRoot()
+    local miscFolder = Workspace:FindFirstChild("Misc")
+    if not miscFolder then return nil, nil end
+    local aiFolder = miscFolder:FindFirstChild("AI")
+    if not aiFolder then return nil, nil end
+
+    for _, child in ipairs(aiFolder:GetChildren()) do
+        if child:IsA("Model") then
+            local hum = child:FindFirstChildOfClass("Humanoid")
+            local root = child:FindFirstChild("HumanoidRootPart") or child:FindFirstChildWhichIsA("BasePart")
+            if hum and hum.Health > 0 and root then
+                return root, child.Name
+            end
+        end
+    end
+    return nil, nil
+end
+
+--------------------------------------------------------------------------------
+-- ฟังก์ชันลอยลากถอยหลัง 8 บล็อก (ระนาบเดียวกัน ไม่เพิ่มความสูง กันตกแมพ/ขาหัก)
+--------------------------------------------------------------------------------
+local function smoothGlideAway(bossRoot)
+    if not myRoot or not myRoot.Parent or not bossRoot or not bossRoot.Parent then return end
+
     task.spawn(function()
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.S, false, game)
-        task.wait(duration)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
+        -- คำนวณทิศทางถอยออกจากบอสในแนวระนาบ (ไม่นำแกน Y มาคิด)
+        local myPos = myRoot.Position
+        local bossPos = bossRoot.Position
+        
+        local dir = (myPos - bossPos)
+        dir = Vector3.new(dir.X, 0, dir.Z) -- ล็อคแกน Y เป็น 0
+        
+        if dir.Magnitude == 0 then
+            dir = -myRoot.CFrame.LookVector
+            dir = Vector3.new(dir.X, 0, dir.Z)
+        end
+        
+        dir = dir.Unit
+        
+        -- ตำแหน่งปลายทางคงระดับ Y เท่าเดิมเป๊ะๆ
+        local targetPosition = myPos + (dir * GLIDE_DISTANCE)
+        local targetCFrame = CFrame.new(targetPosition, targetPosition + myRoot.CFrame.LookVector)
+        
+        local tweenInfo = TweenInfo.new(
+            GLIDE_DURATION,
+            Enum.EasingStyle.Quad,
+            Enum.EasingDirection.Out
+        )
+        
+        local tween = TweenService:Create(myRoot, tweenInfo, {CFrame = targetCFrame})
+        tween:Play()
     end)
 end
 
 --------------------------------------------------------------------------------
--- ฟังก์ชัน Teleport ปลอดภัย (เช็กพื้นกันลอย/ตกแมพ)
+-- ฟังก์ชันถอยหลังด้วยปุ่ม S สำหรับ Burst 3
 --------------------------------------------------------------------------------
-local function safeTeleportAway(bossRoot)
-    if not myRoot or not myRoot.Parent or not bossRoot or not bossRoot.Parent then return end
-
-    -- คำนวณทิศทางถอยออกจากบอส
-    local dir = (myRoot.Position - bossRoot.Position)
-    dir = Vector3.new(dir.X, 0, dir.Z)
-
-    if dir.Magnitude == 0 then
-        dir = -bossRoot.CFrame.LookVector
-        dir = Vector3.new(dir.X, 0, dir.Z)
-    end
-
-    dir = dir.Unit
-    local targetPos = bossRoot.Position + (dir * SAFE_TELEPORT_DIST)
-
-    -- ใช้ Raycast ยิงลงพื้นเพื่อหาความสูงระดับเดียวกับพื้นดินจริง
-    local rayOrigin = targetPos + Vector3.new(0, 10, 0)
-    local rayDirection = Vector3.new(0, -30, 0)
-
-    local raycastParams = RaycastParams.new()
-    raycastParams.FilterAncestorsClips = {myChar}
-    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-
-    local raycastResult = Workspace:Raycast(rayOrigin, rayDirection, raycastParams)
-
-    local finalY = bossRoot.Position.Y
-    if raycastResult then
-        finalY = raycastResult.Position.Y + (myRoot.Size.Y / 2) + 0.5
-    end
-
-    local finalPos = Vector3.new(targetPos.X, finalY, targetPos.Z)
-    myRoot.CFrame = CFrame.lookAt(finalPos, Vector3.new(bossRoot.Position.X, finalPos.Y, bossRoot.Position.Z))
+local function retreatWithS()
+    task.spawn(function()
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.S, false, game)
+        task.wait(RETREAT_DURATION)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
+    end)
 end
 
 --------------------------------------------------------------------------------
@@ -274,7 +296,7 @@ local function updateBurstBar(count)
         BurstText.Text = "⚡ BURST x2 (PAUSE 0.25s)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
     elseif count >= 3 then
-        BurstText.Text = "💥 BURST x3 (RETREAT 1.0s + ATTACK)"
+        BurstText.Text = "💥 BURST x3 (S RETREAT + ATTACK)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
     else
         BurstText.Text = "BURST COUNT: " .. count .. "/3"
@@ -428,26 +450,8 @@ NormalModeBtn.MouseButton1Click:Connect(function() setCombatMode("Normal") end)
 CautiousModeBtn.MouseButton1Click:Connect(function() setCombatMode("Cautious") end)
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันค้นหาและหมุนมุมมอง
+-- หมุนมุมมอง
 --------------------------------------------------------------------------------
-local function getBossRoot()
-    local miscFolder = Workspace:FindFirstChild("Misc")
-    if not miscFolder then return nil, nil end
-    local aiFolder = miscFolder:FindFirstChild("AI")
-    if not aiFolder then return nil, nil end
-
-    for _, child in ipairs(aiFolder:GetChildren()) do
-        if child:IsA("Model") then
-            local hum = child:FindFirstChildOfClass("Humanoid")
-            local root = child:FindFirstChild("HumanoidRootPart") or child:FindFirstChildWhichIsA("BasePart")
-            if hum and hum.Health > 0 and root then
-                return root, child.Name
-            end
-        end
-    end
-    return nil, nil
-end
-
 local function safeFaceTarget(targetRoot)
     if not myRoot or not myRoot.Parent or not targetRoot or not targetRoot.Parent then return end
     
@@ -480,15 +484,11 @@ local function onSoundTriggered(soundCategory)
         currentTargetRoot = bossRoot
     end
 
-    -- 1. กรณีเสียง TELEPORT: เช็กว่าอยู่ในระยะ <= 8 บล็อกหรือไม่ หากใช่ให้ Teleport ถอยตั้งหลักทันที
-    if soundCategory == "TELEPORT" and bossRoot and myRoot and myRoot.Parent then
-        local currentDist = (bossRoot.Position - myRoot.Position).Magnitude
-        if currentDist <= SAFE_TELEPORT_DIST then
-            safeTeleportAway(bossRoot)
-        end
+    -- หากตรวจพบเสียง Teleport (3 เสียงวาร์ป) ให้ลอยลากถอยหลัง 8 บล็อก
+    if soundCategory == "TELEPORT" and bossRoot then
+        smoothGlideAway(bossRoot)
     end
 
-    -- 2. กรณีเสียง KICK_HIT: หยุดการโจมตี 0.5s ตามเดิม (ไม่ Teleport)
     if soundCategory == "KICK_HIT" then
         pauseEndTime = now + KICK_HIT_PAUSE
         
@@ -511,14 +511,14 @@ local function onSoundTriggered(soundCategory)
     local currentBurstCount = #soundTimestamps
     updateBurstBar(currentBurstCount)
 
-    -- 3. กรณี Burst 3 ครั้ง: ถอยหลัง (กด S) 1 วินาทีเหมือนเดิม
     if currentBurstCount >= PRESS_BURST_THRESHOLD then
         soundTimestamps = {}
         
-        retreatBackwards(RETREAT_DURATION)
+        -- Burst 3 ครั้ง สั่งกด S ถอยหลังเหมือนเดิม
+        retreatWithS()
         pauseEndTime = now + BURST3_PAUSE_DURATION
         
-        StatusLabel.Text = "💥 BURST x3! RETREAT (PAUSE 0.5s -> ATTACK)"
+        StatusLabel.Text = "💥 BURST x3! RETREAT S (PAUSE 0.5s -> ATTACK)"
         StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
         if isHolding then
             HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
@@ -551,7 +551,7 @@ local function onSoundTriggered(soundCategory)
 
     pauseEndTime = now + duration
 
-    StatusLabel.Text = "👀 LOOK + ⚠️ " .. distanceType .. " PAUSE (" .. string.format("%.1f", duration) .. "s)"
+    StatusLabel.Text = "👀 GLIDE 8 BLOCKS + ⚠️ " .. distanceType .. " PAUSE (" .. string.format("%.1f", duration) .. "s)"
     StatusLabel.TextColor3 = (distanceType == "FAR") and Color3.fromRGB(255, 50, 50) or Color3.fromRGB(255, 150, 0)
     
     if isHolding then
