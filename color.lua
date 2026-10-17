@@ -564,4 +564,87 @@ RunService.Heartbeat:Connect(function()
     
     if not myRoot or not myRoot.Parent then
         if LocalPlayer.Character then
-            myRoot = LocalPlay
+            myRoot = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        end
+    end
+
+    for i = #soundTimestamps, 1, -1 do
+        if now - soundTimestamps[i] > BURST_TIME_WINDOW then
+            table.remove(soundTimestamps, i)
+            updateBurstBar(#soundTimestamps)
+        end
+    end
+
+    if isLockingLook then
+        if now < lockLookEndTime and currentTargetRoot and currentTargetRoot.Parent then
+            if now - lastFaceTime >= 0.02 then
+                lastFaceTime = now
+                safeFaceTarget(currentTargetRoot)
+            end
+        else
+            isLockingLook = false
+            currentTargetRoot = nil
+        end
+    end
+
+    if not isHolding and now >= pauseEndTime and not isLockingLook and (now - lastQEvadeTime > 1.2) then
+        local bossRoot, bossName = getBossRoot()
+        if bossRoot then
+            StatusLabel.Text = "🎯 [" .. currentModeKey:upper() .. "] TRACKING: " .. bossName:upper()
+            StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
+        else
+            StatusLabel.Text = "🛡️ " .. currentModeKey:upper() .. " MODE READY"
+            StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
+        end
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- ลูปสแปมเมาส์ซ้าย (LMB Attack Loop)
+--------------------------------------------------------------------------------
+local function clickLMB()
+    local viewportSize = Camera.ViewportSize
+    local centerX = viewportSize.X / 2
+    local centerY = viewportSize.Y / 2
+
+    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
+    task.wait(0.01)
+    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
+end
+
+local function startSpam()
+    task.spawn(function()
+        while isHolding do
+            local currentTime = tick()
+
+            if currentTime < pauseEndTime then
+                HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+            else
+                StatusLabel.Text = "⚔ SPAMMING ATTACK..."
+                StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
+                HoldButton.BackgroundColor3 = Color3.fromRGB(50, 220, 50)
+                
+                clickLMB()
+            end
+
+            task.wait(SPAM_SPEED)
+        end
+    end)
+end
+
+HoldButton.MouseButton1Down:Connect(function()
+    if not isHolding then
+        isHolding = true
+        startSpam()
+    end
+end)
+
+HoldButton.MouseButton1Up:Connect(function()
+    isHolding = false
+    HoldButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
+end)
+
+HoldButton.MouseLeave:Connect(function()
+    isHolding = false
+    HoldButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
+end)
