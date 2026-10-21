@@ -4,6 +4,7 @@ local Workspace = game:GetService("Workspace")
 local SoundService = game:GetService("SoundService")
 local RunService = game:GetService("RunService")
 local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
@@ -23,38 +24,40 @@ local MODES = {
         Name = "⚔️ Normal Mode (สู้ปกติ)",
         ClosePause = 0.6,
         FarPause = 0.8,
-        QDelay = 0.25 -- Normal Mode หน่วงเวลา 0.25 วินาทีก่อนกด Q
+        QDelay = 0.25
     },
     ["Cautious"] = {
         Name = "🛡️ Cautious Mode (สู้แบบระวัง)",
         ClosePause = 0.7,
         FarPause = 1.0,
-        QDelay = 0.0 -- Cautious Mode กด Q ทันที
+        QDelay = 0.0
     }
 }
 
 local currentModeKey = "Normal"               
 local SPAM_SPEED = 0.03                       
 local FAR_DISTANCE = 15.0                     
+local SAFE_DISTANCE_THRESHOLD = 12.0          -- ระยะปลอดภัย หากบอสวาร์ปมาใกล้กว่านี้จะเด้งหนีทันที
+local GLIDE_DISTANCE = 12.0                   -- ระยะพุ่งหลบ 12 บล็อก
+local GLIDE_DURATION = 0.10                   -- ความเร็วพุ่งหลบความเร็วสูง 0.10 วินาที
 
-local KICK_HIT_PAUSE = 0.5                    -- ระยะเวลา Pause เมื่อโดนท่าเตะ (วินาที)
-local BURST2_PAUSE_DURATION = 0.25            -- Burst 2 ให้ Pause 0.25 วินาที
-local BURST3_PAUSE_DURATION = 0.5             -- Burst 3 ให้ Pause 0.5 วินาทีก่อนเริ่มตี
-local RETREAT_DURATION = 1.0                  -- ระยะเวลาถอยหลังรวม (วินาที)
+local KICK_HIT_PAUSE = 0.5                    
+local BURST2_PAUSE_DURATION = 0.25            
+local BURST3_PAUSE_DURATION = 0.5             
+local RETREAT_DURATION = 1.0                  
 
-local PRESS_BURST_THRESHOLD = 3               -- วาร์ป 3 ครั้ง = ถอยหลังสร้างระยะห่าง
-local BURST_TIME_WINDOW = 0.6                -- กรอบเวลานับเสียงรัว (วินาที)
-local SOUND_DEBOUNCE_TIME = 0.10             -- คูลดาวน์กันนับเสียงเบิ้ล (วินาที)
-local LOCK_DURATION = 0.5                    
+local PRESS_BURST_THRESHOLD = 3               
+local BURST_TIME_WINDOW = 0.6                
+local SOUND_DEBOUNCE_TIME = 0.10             
+local LOCK_DURATION = 0.15                    -- ลดเวลาล็อคเป้าให้สั้นมาก เพื่อไม่ให้ CFrame ดึงตัวสะบัด
 
--- ตั้งค่าระบบตรวจจับการโดนดาเมจ
-local DAMAGE_HIT_THRESHOLD = 2                -- ต้องโดนดาเมจอย่างน้อย 2 ครั้ง (ห้ามกดเมื่อโดนครั้งแรก)
-local DAMAGE_TIME_WINDOW = 0.4                -- กรอบเวลานับการโดนรัวๆ (วินาที)
-local Q_EVADE_COOLDOWN = 1.0                  -- คูลดาวน์ปุ่ม Q หลบ (วินาที)
-local DAMAGE_PAUSE_DURATION = 1.5             -- หยุดสแปมโจมตี 1.5 วินาที เมื่อโดนดาเมจ
+local DAMAGE_HIT_THRESHOLD = 2                
+local DAMAGE_TIME_WINDOW = 0.4                
+local Q_EVADE_COOLDOWN = 1.0                  
+local DAMAGE_PAUSE_DURATION = 1.5             
 
 --------------------------------------------------------------------------------
--- ตัวแปรระบบ
+-- ตัวแปรระบบ Real-time Tracking
 --------------------------------------------------------------------------------
 local isHolding = false
 local isLocked = true
@@ -67,24 +70,117 @@ local isLockingLook = false
 local lockLookEndTime = 0
 local currentTargetRoot = nil
 local lastFaceTime = 0
+local isGliding = false 
 
 local damageTimestamps = {}
 local lastQEvadeTime = 0
 local lastHealth = 100
+
+-- ตัวแปร Real-time Boss Tracking
+local realTimeBossPos = Vector3.new(0, 0, 0)
+local realTimeBossRoot = nil
 
 local myChar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local myRoot = myChar:WaitForChild("HumanoidRootPart", 5)
 local myHumanoid = myChar:WaitForChild("Humanoid", 5)
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันกดปุ่ม Q เพื่อหลบ (ตามเงื่อนไขของแต่ละโหมด)
+-- ฟังก์ชันค้นหาและอัปเดตตำแหน่งบอส Real-time
+--------------------------------------------------------------------------------
+local function updateRealTimeBoss()
+    local miscFolder = Workspace:FindFirstChild("Misc")
+    if not miscFolder then return nil, nil end
+    local aiFolder = miscFolder:FindFirstChild("AI")
+    if not aiFolder then return nil, nil end
+
+    for _, child in ipairs(aiFolder:GetChildren()) do
+        if child:IsA("Model") then
+            local hum = child:FindFirstChildOfClass("Humanoid")
+            local root = child:FindFirstChild("HumanoidRootPart") or child:FindFirstChildWhichIsA("BasePart")
+            if hum and hum.Health > 0 and root then
+                realTimeBossRoot = root
+                realTimeBossPos = root.Position
+                return root, child.Name
+            end
+        end
+    end
+    realTimeBossRoot = nil
+    return nil, nil
+end
+
+--------------------------------------------------------------------------------
+-- ฟังก์ชันพุ่งหลบ Real-time Dynamic Evade (คํานวณพิกัดบอสสดเพื่อดีดตัวออกห่าง)
+--------------------------------------------------------------------------------
+local function realTimeDynamicEvade()
+    if not myRoot or not myRoot.Parent then return end
+
+    task.spawn(function()
+        isGliding = true 
+        
+        -- อัปเดตตำแหน่งเรียลไทม์ ณ วินาทีนี้
+        updateRealTimeBoss()
+        
+        local myPos = myRoot.Position
+        local escapeDir = Vector3.new(0, 0, 0)
+
+        if realTimeBossRoot and realTimeBossRoot.Parent then
+            local bPos = realTimeBossRoot.Position
+            local dist = (myPos - bPos).Magnitude
+            
+            -- หากบอสอยู่ใกล้ตัวในระยะอันตราย หรือวาร์ปมาโผล่ข้างหลังใกล้ๆ
+            if dist <= SAFE_DISTANCE_THRESHOLD then
+                -- คำนวณทิศทางพุ่งหนีออกจากตำแหน่งบอสตรงๆ
+                local dirVector = (myPos - bPos)
+                escapeDir = Vector3.new(dirVector.X, 0, dirVector.Z)
+                if escapeDir.Magnitude > 0.001 then
+                    escapeDir = escapeDir.Unit
+                end
+            end
+        end
+
+        -- หากบอสไม่ได้อยู่ใกล้มาก หรือคำนวณทิศทางไม่ได้ ให้ถอยหลังตามทิศหน้าตัวเราเอง
+        if escapeDir.Magnitude < 0.1 then
+            local lookVector = myRoot.CFrame.LookVector
+            escapeDir = -Vector3.new(lookVector.X, 0, lookVector.Z).Unit
+        end
+        
+        -- คำนวณตำแหน่งปลายทางหลบภัย 12 บล็อก
+        local targetPosition = myPos + (escapeDir * GLIDE_DISTANCE)
+        local targetCFrame = CFrame.new(targetPosition, targetPosition + myRoot.CFrame.LookVector)
+        
+        local tweenInfo = TweenInfo.new(
+            GLIDE_DURATION,
+            Enum.EasingStyle.Cubic,
+            Enum.EasingDirection.Out
+        )
+        
+        local tween = TweenService:Create(myRoot, tweenInfo, {CFrame = targetCFrame})
+        tween:Play()
+        tween.Completed:Wait()
+        
+        isGliding = false 
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- ฟังก์ชันถอยหลังด้วยปุ่ม S สำหรับ Burst 3
+--------------------------------------------------------------------------------
+local function retreatWithS()
+    task.spawn(function()
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.S, false, game)
+        task.wait(RETREAT_DURATION)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- ฟังก์ชันกดปุ่ม Q เพื่อหลบ
 --------------------------------------------------------------------------------
 local function triggerQEvade()
     task.spawn(function()
         local activeProfile = MODES[currentModeKey]
         local delayTime = activeProfile.QDelay or 0
         
-        -- หากตั้งค่าให้หน่วงเวลา (Normal Mode) จะรอตามกำหนดก่อนกด Q
         if delayTime > 0 then
             task.wait(delayTime)
         end
@@ -108,26 +204,20 @@ local function setupHealthListener(char)
     hum.HealthChanged:Connect(function(newHealth)
         local now = tick()
         
-        -- ตรวจจับกรณีเลือดลดลง (โดนดาเมจ)
         if newHealth < lastHealth then
             table.insert(damageTimestamps, now)
             
-            -- ลบค่า timestamp ที่เก่าเกินกรอบเวลา DAMAGE_TIME_WINDOW
             for i = #damageTimestamps, 1, -1 do
                 if now - damageTimestamps[i] > DAMAGE_TIME_WINDOW then
                     table.remove(damageTimestamps, i)
                 end
             end
             
-            -- เงื่อนไข: โดนรัวๆ (2 ครั้งขึ้นไป) + ไม่อยู่ใน Cooldown ของ Q
             if #damageTimestamps >= DAMAGE_HIT_THRESHOLD and (now - lastQEvadeTime >= Q_EVADE_COOLDOWN) then
                 lastQEvadeTime = now
-                damageTimestamps = {} -- รีเซ็ตคาวต์
+                damageTimestamps = {}
                 
-                -- หยุดการสแปมโจมตีเป็นเวลา 1.5 วินาที ทันที!
                 pauseEndTime = now + DAMAGE_PAUSE_DURATION
-                
-                -- เรียกฟังก์ชันกด Q หลบ
                 triggerQEvade()
                 
                 local modeName = (currentModeKey == "Normal") and "NORMAL (DELAY 0.25s)" or "CAUTIOUS (INSTANT)"
@@ -151,6 +241,7 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
     myRoot = newChar:WaitForChild("HumanoidRootPart", 5)
     Camera = Workspace.CurrentCamera
     isLockingLook = false
+    isGliding = false
     currentTargetRoot = nil
     damageTimestamps = {}
     setupHealthListener(newChar)
@@ -169,7 +260,6 @@ ScreenGui.Name = "ComboSpamMenuGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
--- 1. แถบแสดงสถานะหลัก
 local StatusLabel = Instance.new("TextLabel")
 local StatusCorner = Instance.new("UICorner")
 
@@ -188,7 +278,6 @@ StatusLabel.Font = Enum.Font.SourceSansBold
 StatusCorner.CornerRadius = UDim.new(0, 8)
 StatusCorner.Parent = StatusLabel
 
--- 1.5 หลอดสะสมค่า Burst Progress Bar
 local BurstBarBg = Instance.new("Frame")
 local BurstBarBgCorner = Instance.new("UICorner")
 local BurstBarFill = Instance.new("Frame")
@@ -232,7 +321,7 @@ local function updateBurstBar(count)
         BurstText.Text = "⚡ BURST x2 (PAUSE 0.25s)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
     elseif count >= 3 then
-        BurstText.Text = "💥 BURST x3 (RETREAT + ATTACK)"
+        BurstText.Text = "💥 BURST x3 (S RETREAT + ATTACK)"
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
     else
         BurstText.Text = "BURST COUNT: " .. count .. "/3"
@@ -240,7 +329,6 @@ local function updateBurstBar(count)
     end
 end
 
--- 2. ปุ่มสแปมหลัก (HOLD TO SPAM)
 local HoldButton = Instance.new("TextButton")
 local HoldCorner = Instance.new("UICorner")
 
@@ -261,7 +349,6 @@ HoldButton.Draggable = not isLocked
 HoldCorner.CornerRadius = UDim.new(0, 45)
 HoldCorner.Parent = HoldButton
 
--- 3. ปุ่ม ล็อค/ปลดล็อก
 local LockButton = Instance.new("TextButton")
 local LockCorner = Instance.new("UICorner")
 
@@ -288,7 +375,6 @@ LockButton.MouseButton1Click:Connect(function()
     LockButton.BackgroundColor3 = isLocked and Color3.fromRGB(40, 40, 40) or Color3.fromRGB(200, 120, 0)
 end)
 
--- 4. ปุ่มเปิด/ปิด Main Menu
 local MenuToggleButton = Instance.new("TextButton")
 local MenuToggleCorner = Instance.new("UICorner")
 
@@ -307,7 +393,6 @@ MenuToggleButton.Font = Enum.Font.SourceSansBold
 MenuToggleCorner.CornerRadius = UDim.new(0, 6)
 MenuToggleCorner.Parent = MenuToggleButton
 
--- 5. หน้าต่าง Main Menu Frame
 local MainMenuFrame = Instance.new("Frame")
 local MenuCorner = Instance.new("UICorner")
 local MenuTitle = Instance.new("TextLabel")
@@ -386,39 +471,11 @@ NormalModeBtn.MouseButton1Click:Connect(function() setCombatMode("Normal") end)
 CautiousModeBtn.MouseButton1Click:Connect(function() setCombatMode("Cautious") end)
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันจำลองการเดินถอยหลังหนีบอส
+-- หมุนมุมมอง (ห้ามเปลี่ยน CFrame ขณะกำลังลอย Gliding)
 --------------------------------------------------------------------------------
-local function retreatFromTarget()
-    task.spawn(function()
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.S, false, game)
-        task.wait(RETREAT_DURATION)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
-    end)
-end
-
---------------------------------------------------------------------------------
--- ฟังก์ชันค้นหาและหมุนมุมมอง
---------------------------------------------------------------------------------
-local function getBossRoot()
-    local miscFolder = Workspace:FindFirstChild("Misc")
-    if not miscFolder then return nil, nil end
-    local aiFolder = miscFolder:FindFirstChild("AI")
-    if not aiFolder then return nil, nil end
-
-    for _, child in ipairs(aiFolder:GetChildren()) do
-        if child:IsA("Model") then
-            local hum = child:FindFirstChildOfClass("Humanoid")
-            local root = child:FindFirstChild("HumanoidRootPart") or child:FindFirstChildWhichIsA("BasePart")
-            if hum and hum.Health > 0 and root then
-                return root, child.Name
-            end
-        end
-    end
-    return nil, nil
-end
-
 local function safeFaceTarget(targetRoot)
     if not myRoot or not myRoot.Parent or not targetRoot or not targetRoot.Parent then return end
+    if isGliding then return end -- ป้องกัน CFrame กระชากตัวละครขณะกำลังหลบ
     
     local targetPos = targetRoot.Position
     local currentCam = Workspace.CurrentCamera or Camera
@@ -442,11 +499,16 @@ local function onSoundTriggered(soundCategory)
     end
     lastSoundTriggerTime[soundCategory] = now
 
-    local bossRoot, bossName = getBossRoot()
+    local bossRoot, bossName = updateRealTimeBoss()
     if bossRoot then
         isLockingLook = true
         lockLookEndTime = now + LOCK_DURATION
         currentTargetRoot = bossRoot
+    end
+
+    -- เมื่อตรวจพบเสียงวาร์ป สั่งพุ่งหลบ Real-time ทันที
+    if soundCategory == "TELEPORT" then
+        realTimeDynamicEvade()
     end
 
     if soundCategory == "KICK_HIT" then
@@ -474,10 +536,10 @@ local function onSoundTriggered(soundCategory)
     if currentBurstCount >= PRESS_BURST_THRESHOLD then
         soundTimestamps = {}
         
-        retreatFromTarget()
+        retreatWithS()
         pauseEndTime = now + BURST3_PAUSE_DURATION
         
-        StatusLabel.Text = "💥 BURST x3! RETREAT (PAUSE 0.5s -> ATTACK)"
+        StatusLabel.Text = "💥 BURST x3! RETREAT S (PAUSE 0.5s -> ATTACK)"
         StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
         if isHolding then
             HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
@@ -510,7 +572,7 @@ local function onSoundTriggered(soundCategory)
 
     pauseEndTime = now + duration
 
-    StatusLabel.Text = "👀 LOOK + ⚠️ " .. distanceType .. " PAUSE (" .. string.format("%.1f", duration) .. "s)"
+    StatusLabel.Text = "⚡ REALTIME EVADE + ⚠️ " .. distanceType .. " PAUSE (" .. string.format("%.1f", duration) .. "s)"
     StatusLabel.TextColor3 = (distanceType == "FAR") and Color3.fromRGB(255, 50, 50) or Color3.fromRGB(255, 150, 0)
     
     if isHolding then
@@ -557,8 +619,12 @@ SoundService.DescendantAdded:Connect(checkAndTrackSound)
 scanAllSounds()
 
 --------------------------------------------------------------------------------
--- Heartbeat Loop
+-- Real-time Tracking Loop (RenderStepped)
 --------------------------------------------------------------------------------
+RunService.RenderStepped:Connect(function()
+    updateRealTimeBoss() -- สแกนติดตามพิกัดบอสแบบเรียลไทม์ทุกเฟรม
+end)
+
 RunService.Heartbeat:Connect(function()
     local now = tick()
     
@@ -588,9 +654,9 @@ RunService.Heartbeat:Connect(function()
     end
 
     if not isHolding and now >= pauseEndTime and not isLockingLook and (now - lastQEvadeTime > 1.2) then
-        local bossRoot, bossName = getBossRoot()
+        local bossRoot, bossName = updateRealTimeBoss()
         if bossRoot then
-            StatusLabel.Text = "🎯 [" .. currentModeKey:upper() .. "] TRACKING: " .. bossName:upper()
+            StatusLabel.Text = "🎯 [" .. currentModeKey:upper() .. "] REALTIME TRACKING: " .. bossName:upper()
             StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
         else
             StatusLabel.Text = "🛡️ " .. currentModeKey:upper() .. " MODE READY"
