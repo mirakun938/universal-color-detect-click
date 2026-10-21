@@ -13,10 +13,10 @@ local Camera = Workspace.CurrentCamera
 -- ตั้งค่าระบบ (CONFIG & MODES)
 --------------------------------------------------------------------------------
 local SOUND_TYPES = {
-    ["108688312097046"] = "TELEPORT", -- Smoke_Teleport_Poof_4
-    ["108156925383225"] = "TELEPORT", -- SidestepEnd
-    ["120714138513879"] = "TELEPORT", -- Cursed energy
-    ["105373583781618"] = "KICK_HIT"  -- tk8_kick_hit (ท่าเตะบอส)
+    ["108688312097046"] = "TELEPORT", 
+    ["108156925383225"] = "TELEPORT", 
+    ["120714138513879"] = "TELEPORT", 
+    ["105373583781618"] = "KICK_HIT"  
 }
 
 local MODES = {
@@ -34,11 +34,12 @@ local MODES = {
     }
 }
 
+-- โหมดตอบสนองเมื่อบอสเดิน/วิ่งกะทันหัน ("F_SPAM", "Q_EVADE", "GLIDE_15")
+local moveReactionMode = "F_SPAM" 
+
 local currentModeKey = "Normal"               
 local SPAM_SPEED = 0.03                       
 local FAR_DISTANCE = 15.0                     
-local FRONT_BOSS_DISTANCE = 8.0               -- ล็อคระยะห่างตรง "หน้าบอส" 8 บล็อก
-local GLIDE_DURATION = 0.12                   -- ความเร็วในการลอยไปหน้าบอส (วินาที)
 
 local KICK_HIT_PAUSE = 0.5                    
 local BURST2_PAUSE_DURATION = 0.25            
@@ -48,7 +49,7 @@ local RETREAT_DURATION = 1.0
 local PRESS_BURST_THRESHOLD = 3               
 local BURST_TIME_WINDOW = 0.6                
 local SOUND_DEBOUNCE_TIME = 0.10             
-local LOCK_DURATION = 0.25                    
+local LOCK_DURATION = 0.35                    
 
 local DAMAGE_HIT_THRESHOLD = 2                
 local DAMAGE_TIME_WINDOW = 0.4                
@@ -69,7 +70,10 @@ local isLockingLook = false
 local lockLookEndTime = 0
 local currentTargetRoot = nil
 local lastFaceTime = 0
-local isGliding = false 
+
+local isBurst3Active = false
+local hasReactedToMove = false -- ป้องกันการทำแอคชันซ้ำรัวๆ ขณะบอสขยับ
+local isGliding = false
 
 local damageTimestamps = {}
 local lastQEvadeTime = 0
@@ -101,33 +105,32 @@ local function getBossRoot()
 end
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันลอยลากไปอยู่ "ด้านหน้าบอส" เท่านั้น (Front of Boss Only)
+-- ฟังก์ชันลอยลากถอยหลัง 15 บล็อก
 --------------------------------------------------------------------------------
-local function glideToFrontOfBoss(bossRoot)
+local function smoothGlide15(bossRoot)
     if not myRoot or not myRoot.Parent or not bossRoot or not bossRoot.Parent then return end
 
     task.spawn(function()
-        isGliding = true 
+        isGliding = true
         
-        local myPosY = myRoot.Position.Y -- ดึงระดับความสูงเดิมของเราไว้กันตกแมพ
+        local myPos = myRoot.Position
         local bossPos = bossRoot.Position
-        local bossLook = bossRoot.CFrame.LookVector
         
-        -- คำนวณหาทิศทางด้านหน้าของบอสในแนวราบ
-        local frontDir = Vector3.new(bossLook.X, 0, bossLook.Z).Unit
+        local dir = (myPos - bossPos)
+        dir = Vector3.new(dir.X, 0, dir.Z)
         
-        -- ตำแหน่งจุดหมาย: อยู่หน้าบอสเป็นระยะ 8 บล็อก (ระดับความสูง Y เท่าเดิม)
-        local targetPosition = Vector3.new(
-            bossPos.X + (frontDir.X * FRONT_BOSS_DISTANCE),
-            myPosY,
-            bossPos.Z + (frontDir.Z * FRONT_BOSS_DISTANCE)
-        )
+        if dir.Magnitude < 0.1 then
+            dir = -myRoot.CFrame.LookVector
+            dir = Vector3.new(dir.X, 0, dir.Z)
+        end
         
-        -- หันหน้าเข้าหาบอสโดยอัตโนมัติ
-        local targetCFrame = CFrame.lookAt(targetPosition, Vector3.new(bossPos.X, myPosY, bossPos.Z))
+        dir = dir.Unit
+        
+        local targetPosition = myPos + (dir * 15.0)
+        local targetCFrame = CFrame.new(targetPosition, targetPosition + myRoot.CFrame.LookVector)
         
         local tweenInfo = TweenInfo.new(
-            GLIDE_DURATION,
+            0.15,
             Enum.EasingStyle.Cubic,
             Enum.EasingDirection.Out
         )
@@ -136,7 +139,22 @@ local function glideToFrontOfBoss(bossRoot)
         tween:Play()
         tween.Completed:Wait()
         
-        isGliding = false 
+        isGliding = false
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- ฟังก์ชันสแปมกด F เป็นเวลา 0.5 วินาที
+--------------------------------------------------------------------------------
+local function spamFForHalfSecond()
+    task.spawn(function()
+        local startTime = tick()
+        while tick() - startTime < 0.5 do
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+            task.wait(0.03)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+            task.wait(0.02)
+        end
     end)
 end
 
@@ -219,9 +237,10 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
     myRoot = newChar:WaitForChild("HumanoidRootPart", 5)
     Camera = Workspace.CurrentCamera
     isLockingLook = false
-    isGliding = false
     currentTargetRoot = nil
     damageTimestamps = {}
+    isBurst3Active = false
+    hasReactedToMove = false
     setupHealthListener(newChar)
 end)
 
@@ -379,11 +398,15 @@ local NormalBtnCorner = Instance.new("UICorner")
 local CautiousModeBtn = Instance.new("TextButton")
 local CautiousBtnCorner = Instance.new("UICorner")
 
+-- เพิ่มปุ่มเลือกโหมดตอบสนองการเคลื่อนที่บอส
+local MoveReactBtn = Instance.new("TextButton")
+local MoveReactCorner = Instance.new("UICorner")
+
 MainMenuFrame.Name = "MainMenuFrame"
 MainMenuFrame.Parent = ScreenGui
 MainMenuFrame.AnchorPoint = Vector2.new(0.5, 0.5)
 MainMenuFrame.Position = UDim2.new(0.5, 0, 0.5, -90)
-MainMenuFrame.Size = UDim2.new(0, 240, 0, 130)
+MainMenuFrame.Size = UDim2.new(0, 250, 0, 175)
 MainMenuFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
 MainMenuFrame.BackgroundTransparency = 0.15
 MainMenuFrame.Visible = false
@@ -393,21 +416,21 @@ MenuCorner.Parent = MainMenuFrame
 
 MenuTitle.Name = "MenuTitle"
 MenuTitle.Parent = MainMenuFrame
-MenuTitle.Size = UDim2.new(1, 0, 0, 30)
+MenuTitle.Size = UDim2.new(1, 0, 0, 28)
 MenuTitle.BackgroundTransparency = 1
-MenuTitle.Text = "⚙️ SELECT COMBAT MODE"
+MenuTitle.Text = "⚙️ COMBAT & REACT SETTINGS"
 MenuTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
-MenuTitle.TextSize = 13
+MenuTitle.TextSize = 12
 MenuTitle.Font = Enum.Font.SourceSansBold
 
 NormalModeBtn.Name = "NormalModeBtn"
 NormalModeBtn.Parent = MainMenuFrame
-NormalModeBtn.Position = UDim2.new(0.08, 0, 0.3, 0)
-NormalModeBtn.Size = UDim2.new(0.84, 0, 0, 35)
+NormalModeBtn.Position = UDim2.new(0.08, 0, 0.2, 0)
+NormalModeBtn.Size = UDim2.new(0.84, 0, 0, 32)
 NormalModeBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 100)
 NormalModeBtn.Text = "⚔️ Normal (Q Delay 0.25s)"
 NormalModeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-NormalModeBtn.TextSize = 12
+NormalModeBtn.TextSize = 11
 NormalModeBtn.Font = Enum.Font.SourceSansBold
 
 NormalBtnCorner.CornerRadius = UDim.new(0, 6)
@@ -415,13 +438,26 @@ NormalBtnCorner.Parent = NormalModeBtn
 
 CautiousModeBtn.Name = "CautiousModeBtn"
 CautiousModeBtn.Parent = MainMenuFrame
-CautiousModeBtn.Position = UDim2.new(0.08, 0, 0.63, 0)
-CautiousModeBtn.Size = UDim2.new(0.84, 0, 0, 35)
+CautiousModeBtn.Position = UDim2.new(0.08, 0, 0.44, 0)
+CautiousModeBtn.Size = UDim2.new(0.84, 0, 0, 32)
 CautiousModeBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
 CautiousModeBtn.Text = "🛡️ Cautious (Q Instant)"
 CautiousModeBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
-CautiousModeBtn.TextSize = 12
+CautiousModeBtn.TextSize = 11
 CautiousBtnCorner.Parent = CautiousModeBtn
+
+MoveReactBtn.Name = "MoveReactBtn"
+MoveReactBtn.Parent = MainMenuFrame
+MoveReactBtn.Position = UDim2.new(0.08, 0, 0.68, 0)
+MoveReactBtn.Size = UDim2.new(0.84, 0, 0, 38)
+MoveReactBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 200)
+MoveReactBtn.Text = "🏃 MOVE REACT: SPAM [F] 0.5s"
+MoveReactBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+MoveReactBtn.TextSize = 11
+MoveReactBtn.Font = Enum.Font.SourceSansBold
+
+MoveReactCorner.CornerRadius = UDim.new(0, 6)
+MoveReactCorner.Parent = MoveReactBtn
 
 MenuToggleButton.MouseButton1Click:Connect(function()
     MainMenuFrame.Visible = not MainMenuFrame.Visible
@@ -445,6 +481,23 @@ local function setCombatMode(modeKey)
     StatusLabel.TextColor3 = (modeKey == "Normal") and Color3.fromRGB(0, 255, 150) or Color3.fromRGB(255, 180, 0)
 end
 
+-- สลับโหมดการตอบสนอง 3 โหมดเมื่อบอสเดิน/วิ่ง
+MoveReactBtn.MouseButton1Click:Connect(function()
+    if moveReactionMode == "F_SPAM" then
+        moveReactionMode = "Q_EVADE"
+        MoveReactBtn.Text = "🏃 MOVE REACT: EVADE [Q]"
+        MoveReactBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 200)
+    elseif moveReactionMode == "Q_EVADE" then
+        moveReactionMode = "GLIDE_15"
+        MoveReactBtn.Text = "🏃 MOVE REACT: GLIDE OUT 15B"
+        MoveReactBtn.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+    else
+        moveReactionMode = "F_SPAM"
+        MoveReactBtn.Text = "🏃 MOVE REACT: SPAM [F] 0.5s"
+        MoveReactBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 200)
+    end
+end)
+
 NormalModeBtn.MouseButton1Click:Connect(function() setCombatMode("Normal") end)
 CautiousModeBtn.MouseButton1Click:Connect(function() setCombatMode("Cautious") end)
 
@@ -453,7 +506,7 @@ CautiousModeBtn.MouseButton1Click:Connect(function() setCombatMode("Cautious") e
 --------------------------------------------------------------------------------
 local function safeFaceTarget(targetRoot)
     if not myRoot or not myRoot.Parent or not targetRoot or not targetRoot.Parent then return end
-    if isGliding then return end -- ห้ามแทรกแซงมุมมองขณะลอยลากไปหน้าบอส
+    if isGliding then return end
     
     local targetPos = targetRoot.Position
     local currentCam = Workspace.CurrentCamera or Camera
@@ -484,13 +537,11 @@ local function onSoundTriggered(soundCategory)
         currentTargetRoot = bossRoot
     end
 
-    -- เสียงวาร์ป: ลอยลากไปปักหลักตรง "หน้าบอส" ที่ระยะ 8 บล็อกทันที
-    if soundCategory == "TELEPORT" and bossRoot then
-        glideToFrontOfBoss(bossRoot)
-    end
+    hasReactedToMove = false -- รีเซ็ตการตอบสนองเมื่อมีเสียงใหม่
 
     if soundCategory == "KICK_HIT" then
         pauseEndTime = now + KICK_HIT_PAUSE
+        isBurst3Active = false
         
         StatusLabel.Text = "🦶 KICK DETECTED! PAUSE (" .. string.format("%.1f", KICK_HIT_PAUSE) .. "s)"
         StatusLabel.TextColor3 = Color3.fromRGB(255, 170, 0)
@@ -514,6 +565,7 @@ local function onSoundTriggered(soundCategory)
     if currentBurstCount >= PRESS_BURST_THRESHOLD then
         soundTimestamps = {}
         
+        isBurst3Active = true 
         retreatWithS()
         pauseEndTime = now + BURST3_PAUSE_DURATION
         
@@ -524,6 +576,8 @@ local function onSoundTriggered(soundCategory)
         end
         return
     end
+
+    isBurst3Active = false
 
     if currentBurstCount == 2 then
         pauseEndTime = now + BURST2_PAUSE_DURATION
@@ -550,7 +604,7 @@ local function onSoundTriggered(soundCategory)
 
     pauseEndTime = now + duration
 
-    StatusLabel.Text = "👀 GLIDE FRONT 8B + ⚠️ " .. distanceType .. " PAUSE (" .. string.format("%.1f", duration) .. "s)"
+    StatusLabel.Text = "👀 SOUND DETECTED! ⚠️ " .. distanceType .. " PAUSE (" .. string.format("%.1f", duration) .. "s)"
     StatusLabel.TextColor3 = (distanceType == "FAR") and Color3.fromRGB(255, 50, 50) or Color3.fromRGB(255, 150, 0)
     
     if isHolding then
@@ -615,6 +669,32 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
+    -- === ตรวจสอบการเดิน/วิ่งกะทันหันของบอสขณะอยู่ในช่วง Pause ===
+    local bossRoot, bossName = getBossRoot()
+    if bossRoot and now < pauseEndTime and not isBurst3Active and not hasReactedToMove then
+        local bossVelocity = bossRoot.AssemblyLinearVelocity
+        local bossSpeed = Vector3.new(bossVelocity.X, 0, bossVelocity.Z).Magnitude
+        
+        -- เมื่อความเร็วบอส > 2 (เริ่มเดินหรือวิ่ง)
+        if bossSpeed > 2 then
+            hasReactedToMove = true
+            
+            if moveReactionMode == "F_SPAM" then
+                spamFForHalfSecond() -- 1. สแปม F เป็นเวลา 0.5s + คง Pause ไว้
+                StatusLabel.Text = "🛡️ BOSS MOVED! SPAM [F] 0.5s BLOCKING!"
+                StatusLabel.TextColor3 = Color3.fromRGB(200, 0, 255)
+            elseif moveReactionMode == "Q_EVADE" then
+                triggerQEvade() -- 2. กด Q + คง Pause ไว้
+                StatusLabel.Text = "⚡ BOSS MOVED! Q EVADING!"
+                StatusLabel.TextColor3 = Color3.fromRGB(0, 200, 255)
+            elseif moveReactionMode == "GLIDE_15" then
+                smoothGlide15(bossRoot) -- 3. ลากตัวออกระยะ 15 บล็อก
+                StatusLabel.Text = "💨 BOSS MOVED! GLIDING OUT 15 BLOCKS!"
+                StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 0)
+            end
+        end
+    end
+
     if isLockingLook then
         if now < lockLookEndTime and currentTargetRoot and currentTargetRoot.Parent then
             if now - lastFaceTime >= 0.02 then
@@ -628,7 +708,6 @@ RunService.Heartbeat:Connect(function()
     end
 
     if not isHolding and now >= pauseEndTime and not isLockingLook and (now - lastQEvadeTime > 1.2) then
-        local bossRoot, bossName = getBossRoot()
         if bossRoot then
             StatusLabel.Text = "🎯 [" .. currentModeKey:upper() .. "] TRACKING: " .. bossName:upper()
             StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
