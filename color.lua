@@ -40,6 +40,7 @@ local moveReactionMode = "F_SPAM"
 local currentModeKey = "Normal"               
 local SPAM_SPEED = 0.03                       
 local FAR_DISTANCE = 15.0                     
+local MAX_REACT_DISTANCE = 18.0               -- ระยะสูงสุดที่ระบบกะทันหันจะทำงาน
 
 local KICK_HIT_PAUSE = 0.5                    
 local BURST2_PAUSE_DURATION = 0.25            
@@ -73,6 +74,7 @@ local lastFaceTime = 0
 
 local isBurst3Active = false
 local isGliding = false
+local hasReactedToMove = false
 
 local damageTimestamps = {}
 local lastQEvadeTime = 0
@@ -101,59 +103,6 @@ local function getBossModel()
         end
     end
     return nil, nil, nil
-end
-
---------------------------------------------------------------------------------
--- ฟังก์ชันดึง Animation IDs ที่ไม่ใช่ท่าโจมตีหลัก (นับ AOE และ Choke เป็นปกติ)
---------------------------------------------------------------------------------
-local function getNonAttackAnimIds(bossModel)
-    local nonAttackIds = {}
-    if not bossModel then return nonAttackIds end
-
-    local aiSubFolder = bossModel:FindFirstChild("AI")
-    if not aiSubFolder then return nonAttackIds end
-    
-    local animFolder = aiSubFolder:FindFirstChild("Animations")
-    if not animFolder then return nonAttackIds end
-
-    for _, item in ipairs(animFolder:GetChildren()) do
-        if item:IsA("Animation") then
-            local nameLower = item.Name:lower()
-            -- คัดออกเฉพาะท่าที่มีคำว่า attack (ปล่อยให้ AOE, Choke, Dodge, Alerted ฯลฯ ผ่านเป็นปกติ)
-            if not nameLower:find("attack") then
-                local animId = item.AnimationId
-                if animId and animId ~= "" then
-                    nonAttackIds[animId] = true
-                end
-            end
-        end
-    end
-
-    return nonAttackIds
-end
-
---------------------------------------------------------------------------------
--- ฟังก์ชันตรวจสอบว่าบอสกำลังเล่น Animation เคลื่อนที่/วาร์ป/ปกติ หรือไม่
---------------------------------------------------------------------------------
-local function isBossPlayingNonAttackAnim(bossModel, bossHum)
-    if not bossHum then return false end
-    
-    local animator = bossHum:FindFirstChildOfClass("Animator")
-    if not animator then return false end
-
-    local validAnimIds = getNonAttackAnimIds(bossModel)
-    local playingTracks = animator:GetPlayingAnimationTracks()
-    
-    for _, track in ipairs(playingTracks) do
-        if track.IsPlaying and track.Animation then
-            local currentId = track.Animation.AnimationId
-            if validAnimIds[currentId] then
-                return true -- กำลังเล่นอนิเมชันปกติ
-            end
-        end
-    end
-    
-    return false -- ไม่พบอนิเมชันปกติกำลังเล่น (หลุดเดิน/วิ่งกะทันหัน)
 end
 
 --------------------------------------------------------------------------------
@@ -296,6 +245,7 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
     currentTargetRoot = nil
     damageTimestamps = {}
     isBurst3Active = false
+    hasReactedToMove = false
     setupHealthListener(newChar)
 end)
 
@@ -312,14 +262,15 @@ ScreenGui.Name = "ComboSpamMenuGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
+-- 1. แถบแสดงสถานะหลัก
 local StatusLabel = Instance.new("TextLabel")
 local StatusCorner = Instance.new("UICorner")
 
 StatusLabel.Name = "StatusLabel"
 StatusLabel.Parent = ScreenGui
 StatusLabel.AnchorPoint = Vector2.new(0.5, 0)
-StatusLabel.Position = UDim2.new(0.5, 0, 0.04, 0)
-StatusLabel.Size = UDim2.new(0, 310, 0, 32)
+StatusLabel.Position = UDim2.new(0.5, 0, 0.03, 0)
+StatusLabel.Size = UDim2.new(0, 320, 0, 30)
 StatusLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 StatusLabel.BackgroundTransparency = 0.25
 StatusLabel.Text = "🛡️ NORMAL MODE READY"
@@ -330,6 +281,26 @@ StatusLabel.Font = Enum.Font.SourceSansBold
 StatusCorner.CornerRadius = UDim.new(0, 8)
 StatusCorner.Parent = StatusLabel
 
+-- 1.2 แถบแสดงสถานะการเคลื่อนที่ของบอส (BOSS MOVEMENT STATUS UI)
+local BossMoveStatusLabel = Instance.new("TextLabel")
+local BossMoveCorner = Instance.new("UICorner")
+
+BossMoveStatusLabel.Name = "BossMoveStatusLabel"
+BossMoveStatusLabel.Parent = ScreenGui
+BossMoveStatusLabel.AnchorPoint = Vector2.new(0.5, 0)
+BossMoveStatusLabel.Position = UDim2.new(0.5, 0, 0.07, 0)
+BossMoveStatusLabel.Size = UDim2.new(0, 320, 0, 20)
+BossMoveStatusLabel.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+BossMoveStatusLabel.BackgroundTransparency = 0.3
+BossMoveStatusLabel.Text = "🟢 BOSS STATUS: IDLE / STANDING"
+BossMoveStatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+BossMoveStatusLabel.TextSize = 10
+BossMoveStatusLabel.Font = Enum.Font.SourceSansBold
+
+BossMoveCorner.CornerRadius = UDim.new(0, 5)
+BossMoveCorner.Parent = BossMoveStatusLabel
+
+-- 1.5 หลอดสะสมค่า Burst Progress Bar
 local BurstBarBg = Instance.new("Frame")
 local BurstBarBgCorner = Instance.new("UICorner")
 local BurstBarFill = Instance.new("Frame")
@@ -339,8 +310,8 @@ local BurstText = Instance.new("TextLabel")
 BurstBarBg.Name = "BurstBarBg"
 BurstBarBg.Parent = ScreenGui
 BurstBarBg.AnchorPoint = Vector2.new(0.5, 0)
-BurstBarBg.Position = UDim2.new(0.5, 0, 0.082, 0)
-BurstBarBg.Size = UDim2.new(0, 310, 0, 14)
+BurstBarBg.Position = UDim2.new(0.5, 0, 0.10, 0)
+BurstBarBg.Size = UDim2.new(0, 320, 0, 14)
 BurstBarBg.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
 BurstBarBg.BackgroundTransparency = 0.3
 
@@ -590,6 +561,8 @@ local function onSoundTriggered(soundCategory)
         currentTargetRoot = bossRoot
     end
 
+    hasReactedToMove = false
+
     if soundCategory == "KICK_HIT" then
         pauseEndTime = now + KICK_HIT_PAUSE
         isBurst3Active = false
@@ -600,18 +573,6 @@ local function onSoundTriggered(soundCategory)
             HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
         end
         return
-    end
-
-    -- === เช็ก ANIMATION เมื่อได้ยินเสียง TELEPORT ===
-    if soundCategory == "TELEPORT" then
-        task.wait(0.04)
-        local hasNonAttackAnim = isBossPlayingNonAttackAnim(bossModel, bossHum)
-        
-        -- ถ้าไม่มีอนิเมชันปกติเล่นอยู่ ➔ ถือเป็นเดิน/วิ่งกะทันหัน!
-        if not hasNonAttackAnim and not isBurst3Active then
-            executeSuddenReaction(bossRoot)
-            return
-        end
     end
 
     table.insert(soundTimestamps, now)
@@ -732,8 +693,34 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
+    -- === ตรวจสอบและอัปเดต UI สถานะการเดิน/วิ่งของบอส ===
+    local bossModel, bossRoot, bossHum = getBossModel()
+    if bossRoot then
+        local bossVelocity = bossRoot.AssemblyLinearVelocity
+        local bossSpeed = Vector3.new(bossVelocity.X, 0, bossVelocity.Z).Magnitude
+        
+        if bossSpeed > 3 then
+            BossMoveStatusLabel.Text = "🏃 BOSS STATUS: MOVING / RUNNING (" .. string.format("%.1f", bossSpeed) .. ")"
+            BossMoveStatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+        else
+            BossMoveStatusLabel.Text = "🟢 BOSS STATUS: IDLE / STANDING"
+            BossMoveStatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+        end
+
+        -- ตรวจจับการเดิน/วิ่งกะทันหันขณะอยู่ในช่วง Pause
+        if myRoot and myRoot.Parent and now < pauseEndTime and not isBurst3Active and not hasReactedToMove then
+            local dist = (bossRoot.Position - myRoot.Position).Magnitude
+            if dist <= MAX_REACT_DISTANCE and bossSpeed > 3 then
+                hasReactedToMove = true
+                executeSuddenReaction(bossRoot)
+            end
+        end
+    else
+        BossMoveStatusLabel.Text = "⚪ BOSS STATUS: NOT DETECTED"
+        BossMoveStatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+    end
+
     if isLockingLook then
-        local bossModel, bossRoot, bossHum = getBossModel()
         if now < lockLookEndTime and bossRoot and bossRoot.Parent then
             if now - lastFaceTime >= 0.02 then
                 lastFaceTime = now
@@ -746,7 +733,6 @@ RunService.Heartbeat:Connect(function()
     end
 
     if not isHolding and now >= pauseEndTime and not isLockingLook and (now - lastQEvadeTime > 1.2) then
-        local bossModel, bossRoot, bossHum = getBossModel()
         if bossRoot then
             StatusLabel.Text = "🎯 [" .. currentModeKey:upper() .. "] TRACKING: " .. bossModel.Name:upper()
             StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
