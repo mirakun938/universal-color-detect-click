@@ -34,7 +34,7 @@ local MODES = {
     }
 }
 
--- โหมดตอบสนองเมื่อบอสเดิน/วิ่งกะทันหัน ("F_SPAM", "Q_EVADE", "GLIDE_15")
+-- โหมดตอบสนองเมื่อตรวจพบการขยับกะทันหัน ("F_SPAM", "Q_EVADE", "GLIDE_15")
 local moveReactionMode = "F_SPAM" 
 
 local currentModeKey = "Normal"               
@@ -72,7 +72,6 @@ local currentTargetRoot = nil
 local lastFaceTime = 0
 
 local isBurst3Active = false
-local hasReactedToMove = false -- ป้องกันการทำแอคชันซ้ำรัวๆ ขณะบอสขยับ
 local isGliding = false
 
 local damageTimestamps = {}
@@ -86,76 +85,133 @@ local myHumanoid = myChar:WaitForChild("Humanoid", 5)
 --------------------------------------------------------------------------------
 -- ฟังก์ชันค้นหาบอส/NPC
 --------------------------------------------------------------------------------
-local function getBossRoot()
+local function getBossModel()
     local miscFolder = Workspace:FindFirstChild("Misc")
-    if not miscFolder then return nil, nil end
+    if not miscFolder then return nil, nil, nil end
     local aiFolder = miscFolder:FindFirstChild("AI")
-    if not aiFolder then return nil, nil end
+    if not aiFolder then return nil, nil, nil end
 
     for _, child in ipairs(aiFolder:GetChildren()) do
         if child:IsA("Model") then
             local hum = child:FindFirstChildOfClass("Humanoid")
             local root = child:FindFirstChild("HumanoidRootPart") or child:FindFirstChildWhichIsA("BasePart")
             if hum and hum.Health > 0 and root then
-                return root, child.Name
+                return child, root, hum
             end
         end
     end
-    return nil, nil
+    return nil, nil, nil
 end
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันลอยลากถอยหลัง 15 บล็อก
+-- ฟังก์ชันดึง Animation IDs ที่ไม่ใช่ท่าโจมตีหลัก (นับ AOE และ Choke เป็นปกติ)
 --------------------------------------------------------------------------------
-local function smoothGlide15(bossRoot)
-    if not myRoot or not myRoot.Parent or not bossRoot or not bossRoot.Parent then return end
+local function getNonAttackAnimIds(bossModel)
+    local nonAttackIds = {}
+    if not bossModel then return nonAttackIds end
 
-    task.spawn(function()
-        isGliding = true
-        
-        local myPos = myRoot.Position
-        local bossPos = bossRoot.Position
-        
-        local dir = (myPos - bossPos)
-        dir = Vector3.new(dir.X, 0, dir.Z)
-        
-        if dir.Magnitude < 0.1 then
-            dir = -myRoot.CFrame.LookVector
+    local aiSubFolder = bossModel:FindFirstChild("AI")
+    if not aiSubFolder then return nonAttackIds end
+    
+    local animFolder = aiSubFolder:FindFirstChild("Animations")
+    if not animFolder then return nonAttackIds end
+
+    for _, item in ipairs(animFolder:GetChildren()) do
+        if item:IsA("Animation") then
+            local nameLower = item.Name:lower()
+            -- คัดออกเฉพาะท่าที่มีคำว่า attack (ปล่อยให้ AOE, Choke, Dodge, Alerted ฯลฯ ผ่านเป็นปกติ)
+            if not nameLower:find("attack") then
+                local animId = item.AnimationId
+                if animId and animId ~= "" then
+                    nonAttackIds[animId] = true
+                end
+            end
+        end
+    end
+
+    return nonAttackIds
+end
+
+--------------------------------------------------------------------------------
+-- ฟังก์ชันตรวจสอบว่าบอสกำลังเล่น Animation เคลื่อนที่/วาร์ป/ปกติ หรือไม่
+--------------------------------------------------------------------------------
+local function isBossPlayingNonAttackAnim(bossModel, bossHum)
+    if not bossHum then return false end
+    
+    local animator = bossHum:FindFirstChildOfClass("Animator")
+    if not animator then return false end
+
+    local validAnimIds = getNonAttackAnimIds(bossModel)
+    local playingTracks = animator:GetPlayingAnimationTracks()
+    
+    for _, track in ipairs(playingTracks) do
+        if track.IsPlaying and track.Animation then
+            local currentId = track.Animation.AnimationId
+            if validAnimIds[currentId] then
+                return true -- กำลังเล่นอนิเมชันปกติ
+            end
+        end
+    end
+    
+    return false -- ไม่พบอนิเมชันปกติกำลังเล่น (หลุดเดิน/วิ่งกะทันหัน)
+end
+
+--------------------------------------------------------------------------------
+-- ฟังก์ชันปฏิบัติการตอบสนองกะทันหัน
+--------------------------------------------------------------------------------
+local function executeSuddenReaction(bossRoot)
+    if moveReactionMode == "F_SPAM" then
+        task.spawn(function()
+            local startTime = tick()
+            while tick() - startTime < 0.5 do
+                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+                task.wait(0.03)
+                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+                task.wait(0.02)
+            end
+        end)
+        StatusLabel.Text = "🛡️ SUDDEN MOVE! SPAM [F] BLOCKING!"
+        StatusLabel.TextColor3 = Color3.fromRGB(200, 0, 255)
+
+    elseif moveReactionMode == "Q_EVADE" then
+        task.spawn(function()
+            local activeProfile = MODES[currentModeKey]
+            local delayTime = activeProfile.QDelay or 0
+            if delayTime > 0 then task.wait(delayTime) end
+            
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Q, false, game)
+            task.wait(0.05)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Q, false, game)
+        end)
+        StatusLabel.Text = "⚡ SUDDEN MOVE! Q EVADING!"
+        StatusLabel.TextColor3 = Color3.fromRGB(0, 200, 255)
+
+    elseif moveReactionMode == "GLIDE_15" and bossRoot then
+        task.spawn(function()
+            isGliding = true
+            local myPos = myRoot.Position
+            local bossPos = bossRoot.Position
+            
+            local dir = (myPos - bossPos)
             dir = Vector3.new(dir.X, 0, dir.Z)
-        end
-        
-        dir = dir.Unit
-        
-        local targetPosition = myPos + (dir * 15.0)
-        local targetCFrame = CFrame.new(targetPosition, targetPosition + myRoot.CFrame.LookVector)
-        
-        local tweenInfo = TweenInfo.new(
-            0.15,
-            Enum.EasingStyle.Cubic,
-            Enum.EasingDirection.Out
-        )
-        
-        local tween = TweenService:Create(myRoot, tweenInfo, {CFrame = targetCFrame})
-        tween:Play()
-        tween.Completed:Wait()
-        
-        isGliding = false
-    end)
-end
-
---------------------------------------------------------------------------------
--- ฟังก์ชันสแปมกด F เป็นเวลา 0.5 วินาที
---------------------------------------------------------------------------------
-local function spamFForHalfSecond()
-    task.spawn(function()
-        local startTime = tick()
-        while tick() - startTime < 0.5 do
-            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
-            task.wait(0.03)
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
-            task.wait(0.02)
-        end
-    end)
+            if dir.Magnitude < 0.1 then
+                dir = -myRoot.CFrame.LookVector
+                dir = Vector3.new(dir.X, 0, dir.Z)
+            end
+            dir = dir.Unit
+            
+            local targetPosition = myPos + (dir * 15.0)
+            local targetCFrame = CFrame.new(targetPosition, targetPosition + myRoot.CFrame.LookVector)
+            
+            local tweenInfo = TweenInfo.new(0.15, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
+            local tween = TweenService:Create(myRoot, tweenInfo, {CFrame = targetCFrame})
+            tween:Play()
+            tween.Completed:Wait()
+            isGliding = false
+        end)
+        StatusLabel.Text = "💨 SUDDEN MOVE! GLIDING 15 BLOCKS!"
+        StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 0)
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -240,7 +296,6 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
     currentTargetRoot = nil
     damageTimestamps = {}
     isBurst3Active = false
-    hasReactedToMove = false
     setupHealthListener(newChar)
 end)
 
@@ -398,7 +453,6 @@ local NormalBtnCorner = Instance.new("UICorner")
 local CautiousModeBtn = Instance.new("TextButton")
 local CautiousBtnCorner = Instance.new("UICorner")
 
--- เพิ่มปุ่มเลือกโหมดตอบสนองการเคลื่อนที่บอส
 local MoveReactBtn = Instance.new("TextButton")
 local MoveReactCorner = Instance.new("UICorner")
 
@@ -481,7 +535,6 @@ local function setCombatMode(modeKey)
     StatusLabel.TextColor3 = (modeKey == "Normal") and Color3.fromRGB(0, 255, 150) or Color3.fromRGB(255, 180, 0)
 end
 
--- สลับโหมดการตอบสนอง 3 โหมดเมื่อบอสเดิน/วิ่ง
 MoveReactBtn.MouseButton1Click:Connect(function()
     if moveReactionMode == "F_SPAM" then
         moveReactionMode = "Q_EVADE"
@@ -530,14 +583,12 @@ local function onSoundTriggered(soundCategory)
     end
     lastSoundTriggerTime[soundCategory] = now
 
-    local bossRoot, bossName = getBossRoot()
+    local bossModel, bossRoot, bossHum = getBossModel()
     if bossRoot then
         isLockingLook = true
         lockLookEndTime = now + LOCK_DURATION
         currentTargetRoot = bossRoot
     end
-
-    hasReactedToMove = false -- รีเซ็ตการตอบสนองเมื่อมีเสียงใหม่
 
     if soundCategory == "KICK_HIT" then
         pauseEndTime = now + KICK_HIT_PAUSE
@@ -549,6 +600,18 @@ local function onSoundTriggered(soundCategory)
             HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
         end
         return
+    end
+
+    -- === เช็ก ANIMATION เมื่อได้ยินเสียง TELEPORT ===
+    if soundCategory == "TELEPORT" then
+        task.wait(0.04)
+        local hasNonAttackAnim = isBossPlayingNonAttackAnim(bossModel, bossHum)
+        
+        -- ถ้าไม่มีอนิเมชันปกติเล่นอยู่ ➔ ถือเป็นเดิน/วิ่งกะทันหัน!
+        if not hasNonAttackAnim and not isBurst3Active then
+            executeSuddenReaction(bossRoot)
+            return
+        end
     end
 
     table.insert(soundTimestamps, now)
@@ -669,37 +732,12 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- === ตรวจสอบการเดิน/วิ่งกะทันหันของบอสขณะอยู่ในช่วง Pause ===
-    local bossRoot, bossName = getBossRoot()
-    if bossRoot and now < pauseEndTime and not isBurst3Active and not hasReactedToMove then
-        local bossVelocity = bossRoot.AssemblyLinearVelocity
-        local bossSpeed = Vector3.new(bossVelocity.X, 0, bossVelocity.Z).Magnitude
-        
-        -- เมื่อความเร็วบอส > 2 (เริ่มเดินหรือวิ่ง)
-        if bossSpeed > 2 then
-            hasReactedToMove = true
-            
-            if moveReactionMode == "F_SPAM" then
-                spamFForHalfSecond() -- 1. สแปม F เป็นเวลา 0.5s + คง Pause ไว้
-                StatusLabel.Text = "🛡️ BOSS MOVED! SPAM [F] 0.5s BLOCKING!"
-                StatusLabel.TextColor3 = Color3.fromRGB(200, 0, 255)
-            elseif moveReactionMode == "Q_EVADE" then
-                triggerQEvade() -- 2. กด Q + คง Pause ไว้
-                StatusLabel.Text = "⚡ BOSS MOVED! Q EVADING!"
-                StatusLabel.TextColor3 = Color3.fromRGB(0, 200, 255)
-            elseif moveReactionMode == "GLIDE_15" then
-                smoothGlide15(bossRoot) -- 3. ลากตัวออกระยะ 15 บล็อก
-                StatusLabel.Text = "💨 BOSS MOVED! GLIDING OUT 15 BLOCKS!"
-                StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 0)
-            end
-        end
-    end
-
     if isLockingLook then
-        if now < lockLookEndTime and currentTargetRoot and currentTargetRoot.Parent then
+        local bossModel, bossRoot, bossHum = getBossModel()
+        if now < lockLookEndTime and bossRoot and bossRoot.Parent then
             if now - lastFaceTime >= 0.02 then
                 lastFaceTime = now
-                safeFaceTarget(currentTargetRoot)
+                safeFaceTarget(bossRoot)
             end
         else
             isLockingLook = false
@@ -708,8 +746,9 @@ RunService.Heartbeat:Connect(function()
     end
 
     if not isHolding and now >= pauseEndTime and not isLockingLook and (now - lastQEvadeTime > 1.2) then
+        local bossModel, bossRoot, bossHum = getBossModel()
         if bossRoot then
-            StatusLabel.Text = "🎯 [" .. currentModeKey:upper() .. "] TRACKING: " .. bossName:upper()
+            StatusLabel.Text = "🎯 [" .. currentModeKey:upper() .. "] TRACKING: " .. bossModel.Name:upper()
             StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
         else
             StatusLabel.Text = "🛡️ " .. currentModeKey:upper() .. " MODE READY"
