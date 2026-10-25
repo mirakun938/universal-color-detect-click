@@ -262,7 +262,6 @@ ScreenGui.Name = "ComboSpamMenuGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = (gethui and gethui()) or CoreGui or LocalPlayer:WaitForChild("PlayerGui")
 
--- 1. แถบแสดงสถานะหลัก
 local StatusLabel = Instance.new("TextLabel")
 local StatusCorner = Instance.new("UICorner")
 
@@ -281,7 +280,6 @@ StatusLabel.Font = Enum.Font.SourceSansBold
 StatusCorner.CornerRadius = UDim.new(0, 8)
 StatusCorner.Parent = StatusLabel
 
--- 1.2 แถบแสดงสถานะการเคลื่อนที่ของบอส (BOSS MOVEMENT STATUS UI)
 local BossMoveStatusLabel = Instance.new("TextLabel")
 local BossMoveCorner = Instance.new("UICorner")
 
@@ -300,7 +298,6 @@ BossMoveStatusLabel.Font = Enum.Font.SourceSansBold
 BossMoveCorner.CornerRadius = UDim.new(0, 5)
 BossMoveCorner.Parent = BossMoveStatusLabel
 
--- 1.5 หลอดสะสมค่า Burst Progress Bar
 local BurstBarBg = Instance.new("Frame")
 local BurstBarBgCorner = Instance.new("UICorner")
 local BurstBarFill = Instance.new("Frame")
@@ -693,24 +690,24 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- === ตรวจสอบและอัปเดต UI สถานะการเดิน/วิ่งของบอส ===
+    -- === ตรวจสอบการสั่ง "เดิน/วิ่ง" จริงของบอสด้วย MoveDirection ===
     local bossModel, bossRoot, bossHum = getBossModel()
-    if bossRoot then
-        local bossVelocity = bossRoot.AssemblyLinearVelocity
-        local bossSpeed = Vector3.new(bossVelocity.X, 0, bossVelocity.Z).Magnitude
+    if bossRoot and bossHum then
+        -- MoveDirection.Magnitude > 0 หมายถึง AI/บอส สั่งปุ่มเดินหรือวิ่งจริงๆ (ท่าเตะ/จับคอจะไม่เพิ่มค่านี้)
+        local isBossMoving = bossHum.MoveDirection.Magnitude > 0.1
         
-        if bossSpeed > 3 then
-            BossMoveStatusLabel.Text = "🏃 BOSS STATUS: MOVING / RUNNING (" .. string.format("%.1f", bossSpeed) .. ")"
+        if isBossMoving then
+            BossMoveStatusLabel.Text = "🏃 BOSS STATUS: MOVING / RUNNING"
             BossMoveStatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
         else
-            BossMoveStatusLabel.Text = "🟢 BOSS STATUS: IDLE / STANDING"
+            BossMoveStatusLabel.Text = "🟢 BOSS STATUS: IDLE / ATTACKING"
             BossMoveStatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
         end
 
         -- ตรวจจับการเดิน/วิ่งกะทันหันขณะอยู่ในช่วง Pause
         if myRoot and myRoot.Parent and now < pauseEndTime and not isBurst3Active and not hasReactedToMove then
             local dist = (bossRoot.Position - myRoot.Position).Magnitude
-            if dist <= MAX_REACT_DISTANCE and bossSpeed > 3 then
+            if dist <= MAX_REACT_DISTANCE and isBossMoving then
                 hasReactedToMove = true
                 executeSuddenReaction(bossRoot)
             end
