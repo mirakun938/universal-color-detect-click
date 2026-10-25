@@ -298,7 +298,6 @@ local function updateBurstBar(count)
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
     end
 end
-
 local HoldButton = Instance.new("TextButton")
 local HoldCorner = Instance.new("UICorner")
 
