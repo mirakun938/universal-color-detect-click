@@ -86,7 +86,7 @@ local myHumanoid = myChar:WaitForChild("Humanoid", 5)
 --------------------------------------------------------------------------------
 local function getBossModel()
     local miscFolder = Workspace:FindFirstChild("Misc")
-    if not miscFolder then return nil, nil, nil end
+    if not miscFolder me:return nil, nil, nil end
     local aiFolder = miscFolder:FindFirstChild("AI")
     if not aiFolder then return nil, nil, nil end
 
@@ -114,22 +114,31 @@ local function retreatWithS(duration)
 end
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันถอยหลังเมื่อตีอาวุธ (พร้อมระบบ Reset ทันทีเมื่อตีซ้ำ)
+-- ฟังก์ชันถอยหลังเมื่อตีอาวุธ (พร้อมระบบ Reset + กดเบรก W ให้หยุดทันที)
 --------------------------------------------------------------------------------
+local function stopRetreatInstantly()
+    -- ปล่อยปุ่ม S และกดปุ่ม W สั้นๆ เพื่อลบล้างความชะลอ/ไถลของตัวละครให้หยุดสนิททันที
+    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
+    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
+    task.wait(0.01)
+    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
+end
+
 local function triggerHitRetreat(duration)
-    -- หากมี thread การถอยหลังจากการตีรอบก่อนหน้านี้ ให้ยกเลิกและปล่อยปุ่ม S ก่อน
+    -- หากมี thread ถอยหลังทำงานอยู่ ให้ยกเลิกและสั่งเบรกให้หยุดเคลื่อนที่ทันที
     if hitRetreatThread then
         task.cancel(hitRetreatThread)
         hitRetreatThread = nil
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
+        stopRetreatInstantly()
     end
 
     hitRetreatThread = task.spawn(function()
-        -- หยุดกะทันหันเล็กน้อย (0.02s) เพื่อเริ่มนับการถอยใหม่อย่างสมบูรณ์
         task.wait(0.02)
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.S, false, game)
         task.wait(duration or WEAPON_HIT_RETREAT_DURATION)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
+        
+        -- ถอยครบเวลาแล้ว สั่งเบรกหยุดทันที
+        stopRetreatInstantly()
         hitRetreatThread = nil
     end)
 end
@@ -459,11 +468,11 @@ local function onSoundTriggered(soundCategory)
     end
     lastSoundTriggerTime[soundCategory] = now
 
-    -- === ถอยหลังเฉพาะเมื่ออยู่ในโหมดระวัง (Cautious Mode) + ระบบ RESET ทันทีเมื่อตีซ้ำ ===
+    -- === ถอยหลังเฉพาะเมื่ออยู่ในโหมดระวัง (Cautious Mode) + เบรกหยุดทันทีเมื่อ RESET ===
     if soundCategory == "WEAPON_HIT" then
         if currentModeKey == "Cautious" then
             triggerHitRetreat(WEAPON_HIT_RETREAT_DURATION)
-            StatusLabel.Text = "🛡️ CAUTIOUS HIT! RETREAT RESET (0.25s)"
+            StatusLabel.Text = "🛡️ CAUTIOUS HIT! RETREAT RESET & INSTANT STOP"
             StatusLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
         end
         return
