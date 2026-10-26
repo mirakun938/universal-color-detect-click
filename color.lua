@@ -86,7 +86,7 @@ local myHumanoid = myChar:WaitForChild("Humanoid", 5)
 --------------------------------------------------------------------------------
 local function getBossModel()
     local miscFolder = Workspace:FindFirstChild("Misc")
-    if not miscFolder me:return nil, nil, nil end
+    if not miscFolder then return nil, nil, nil end
     local aiFolder = miscFolder:FindFirstChild("AI")
     if not aiFolder then return nil, nil, nil end
 
@@ -103,42 +103,45 @@ local function getBossModel()
 end
 
 --------------------------------------------------------------------------------
+-- ฟังก์ชันสั่งหยุดตัวละครกะทันหันทันที (Instant Stop/Brake)
+--------------------------------------------------------------------------------
+local function stopMovementInstantly()
+    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
+    if myRoot and myRoot.Parent then
+        -- ล้างแรงเคลื่อนที่เฉื่อยออกทันทีเพื่อไม่ให้มีอาการสไลด์ชะลอตัว
+        myRoot.AssemblyLinearVelocity = Vector3.new(0, myRoot.AssemblyLinearVelocity.Y, 0)
+    end
+end
+
+--------------------------------------------------------------------------------
 -- ฟังก์ชันถอยหลังด้วยปุ่ม S สำหรับ Burst 3
 --------------------------------------------------------------------------------
 local function retreatWithS(duration)
     task.spawn(function()
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.S, false, game)
         task.wait(duration or RETREAT_DURATION)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
+        stopMovementInstantly()
     end)
 end
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันถอยหลังเมื่อตีอาวุธ (พร้อมระบบ Reset + กดเบรก W ให้หยุดทันที)
+-- ฟังก์ชันถอยหลังเมื่อตีอาวุธ (พร้อมระบบหยุดกะทันหันและ Reset ทันทีเมื่อตีซ้ำ)
 --------------------------------------------------------------------------------
-local function stopRetreatInstantly()
-    -- ปล่อยปุ่ม S และกดปุ่ม W สั้นๆ เพื่อลบล้างความชะลอ/ไถลของตัวละครให้หยุดสนิททันที
-    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
-    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
-    task.wait(0.01)
-    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
-end
-
 local function triggerHitRetreat(duration)
-    -- หากมี thread ถอยหลังทำงานอยู่ ให้ยกเลิกและสั่งเบรกให้หยุดเคลื่อนที่ทันที
+    -- หากมี thread ถอยหลังเดิมรันอยู่ ให้ยกเลิกและเบรกตัวละครหยุดทันที
     if hitRetreatThread then
         task.cancel(hitRetreatThread)
         hitRetreatThread = nil
-        stopRetreatInstantly()
+        stopMovementInstantly()
     end
 
     hitRetreatThread = task.spawn(function()
-        task.wait(0.02)
+        task.wait(0.01)
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.S, false, game)
         task.wait(duration or WEAPON_HIT_RETREAT_DURATION)
         
-        -- ถอยครบเวลาแล้ว สั่งเบรกหยุดทันที
-        stopRetreatInstantly()
+        -- เมื่อถอยครบเวลา ให้หยุดกะทันหันทันที
+        stopMovementInstantly()
         hitRetreatThread = nil
     end)
 end
@@ -298,6 +301,7 @@ local function updateBurstBar(count)
         BurstBarFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
     end
 end
+
 local HoldButton = Instance.new("TextButton")
 local HoldCorner = Instance.new("UICorner")
 
@@ -467,11 +471,11 @@ local function onSoundTriggered(soundCategory)
     end
     lastSoundTriggerTime[soundCategory] = now
 
-    -- === ถอยหลังเฉพาะเมื่ออยู่ในโหมดระวัง (Cautious Mode) + เบรกหยุดทันทีเมื่อ RESET ===
+    -- === ถอยหลังเฉพาะเมื่ออยู่ในโหมดระวัง (Cautious Mode) + ระบบหยุดกะทันหันทันทีเมื่อตีซ้ำ ===
     if soundCategory == "WEAPON_HIT" then
         if currentModeKey == "Cautious" then
             triggerHitRetreat(WEAPON_HIT_RETREAT_DURATION)
-            StatusLabel.Text = "🛡️ CAUTIOUS HIT! RETREAT RESET & INSTANT STOP"
+            StatusLabel.Text = "🛡️ CAUTIOUS HIT! INSTANT RETREAT RESET (0.25s)"
             StatusLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
         end
         return
