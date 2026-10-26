@@ -34,6 +34,9 @@ local MODES = {
     }
 }
 
+-- โหมดตอบสนองเมื่อตีโดน: "AUTO_RETREAT" (ถอยหลังอัตโนมัติ) หรือ "INSTANT_STOP" (หยุดอย่างเดียวให้ถอยเอง)
+local hitResponseMode = "AUTO_RETREAT"
+
 local currentModeKey = "Normal"               
 local SPAM_SPEED = 0.03                       
 local FAR_DISTANCE = 15.0                     
@@ -42,7 +45,7 @@ local KICK_HIT_PAUSE = 0.5
 local BURST2_PAUSE_DURATION = 0.25            
 local BURST3_PAUSE_DURATION = 0.5             
 local RETREAT_DURATION = 1.0                  
-local WEAPON_HIT_RETREAT_DURATION = 0.25      -- ถอยหลังเฉพาะโหมดระวัง (0.25s)
+local WEAPON_HIT_RETREAT_DURATION = 0.25      -- ระยะเวลาถอยหลังอัตโนมัติ (0.25s)
 
 local PRESS_BURST_THRESHOLD = 3               
 local BURST_TIME_WINDOW = 0.6                
@@ -125,25 +128,27 @@ local function retreatWithS(duration)
 end
 
 --------------------------------------------------------------------------------
--- ฟังก์ชันถอยหลังเมื่อตีอาวุธ (พร้อมระบบหยุดกะทันหันและ Reset ทันทีเมื่อตีซ้ำ)
+-- ฟังก์ชันจัดการการตอบสนองเมื่อตีโดนตามโหมดที่เลือก
 --------------------------------------------------------------------------------
-local function triggerHitRetreat(duration)
-    -- หากมี thread ถอยหลังเดิมรันอยู่ ให้ยกเลิกและเบรกตัวละครหยุดทันที
+local function triggerHitResponse()
     if hitRetreatThread then
         task.cancel(hitRetreatThread)
         hitRetreatThread = nil
-        stopMovementInstantly()
     end
 
-    hitRetreatThread = task.spawn(function()
-        task.wait(0.01)
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.S, false, game)
-        task.wait(duration or WEAPON_HIT_RETREAT_DURATION)
-        
-        -- เมื่อถอยครบเวลา ให้หยุดกะทันหันทันที
-        stopMovementInstantly()
-        hitRetreatThread = nil
-    end)
+    -- หยุดตัวละครกะทันหันทันทีในทุกกรณี
+    stopMovementInstantly()
+
+    -- หากเลือกโหมดถอยหลังอัตโนมัติ ให้รันคำสั่งกด S ต่อเป็นเวลา 0.25s
+    if hitResponseMode == "AUTO_RETREAT" then
+        hitRetreatThread = task.spawn(function()
+            task.wait(0.01)
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.S, false, game)
+            task.wait(WEAPON_HIT_RETREAT_DURATION)
+            stopMovementInstantly()
+            hitRetreatThread = nil
+        end)
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -374,11 +379,14 @@ local NormalBtnCorner = Instance.new("UICorner")
 local CautiousModeBtn = Instance.new("TextButton")
 local CautiousBtnCorner = Instance.new("UICorner")
 
+local HitModeBtn = Instance.new("TextButton")
+local HitModeCorner = Instance.new("UICorner")
+
 MainMenuFrame.Name = "MainMenuFrame"
 MainMenuFrame.Parent = ScreenGui
 MainMenuFrame.AnchorPoint = Vector2.new(0.5, 0.5)
 MainMenuFrame.Position = UDim2.new(0.5, 0, 0.5, -90)
-MainMenuFrame.Size = UDim2.new(0, 250, 0, 130)
+MainMenuFrame.Size = UDim2.new(0, 250, 0, 175)
 MainMenuFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
 MainMenuFrame.BackgroundTransparency = 0.15
 MainMenuFrame.Visible = false
@@ -397,7 +405,7 @@ MenuTitle.Font = Enum.Font.SourceSansBold
 
 NormalModeBtn.Name = "NormalModeBtn"
 NormalModeBtn.Parent = MainMenuFrame
-NormalModeBtn.Position = UDim2.new(0.08, 0, 0.28, 0)
+NormalModeBtn.Position = UDim2.new(0.08, 0, 0.20, 0)
 NormalModeBtn.Size = UDim2.new(0.84, 0, 0, 32)
 NormalModeBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 100)
 NormalModeBtn.Text = "⚔️ Normal (Q Delay 0.25s)"
@@ -410,13 +418,26 @@ NormalBtnCorner.Parent = NormalModeBtn
 
 CautiousModeBtn.Name = "CautiousModeBtn"
 CautiousModeBtn.Parent = MainMenuFrame
-CautiousModeBtn.Position = UDim2.new(0.08, 0, 0.60, 0)
+CautiousModeBtn.Position = UDim2.new(0.08, 0, 0.44, 0)
 CautiousModeBtn.Size = UDim2.new(0.84, 0, 0, 32)
 CautiousModeBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
 CautiousModeBtn.Text = "🛡️ Cautious (Q Instant)"
 CautiousModeBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
 CautiousModeBtn.TextSize = 11
 CautiousBtnCorner.Parent = CautiousModeBtn
+
+HitModeBtn.Name = "HitModeBtn"
+HitModeBtn.Parent = MainMenuFrame
+HitModeBtn.Position = UDim2.new(0.08, 0, 0.68, 0)
+HitModeBtn.Size = UDim2.new(0.84, 0, 0, 36)
+HitModeBtn.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+HitModeBtn.Text = "⚔️ HIT MODE: AUTO RETREAT (0.25s)"
+HitModeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+HitModeBtn.TextSize = 10
+HitModeBtn.Font = Enum.Font.SourceSansBold
+
+HitModeCorner.CornerRadius = UDim.new(0, 6)
+HitModeCorner.Parent = HitModeBtn
 
 MenuToggleButton.MouseButton1Click:Connect(function()
     MainMenuFrame.Visible = not MainMenuFrame.Visible
@@ -439,6 +460,18 @@ local function setCombatMode(modeKey)
     StatusLabel.Text = MODES[modeKey].Name:upper() .. " READY"
     StatusLabel.TextColor3 = (modeKey == "Normal") and Color3.fromRGB(0, 255, 150) or Color3.fromRGB(255, 180, 0)
 end
+
+HitModeBtn.MouseButton1Click:Connect(function()
+    if hitResponseMode == "AUTO_RETREAT" then
+        hitResponseMode = "INSTANT_STOP"
+        HitModeBtn.Text = "🛑 HIT MODE: INSTANT STOP ONLY"
+        HitModeBtn.BackgroundColor3 = Color3.fromRGB(180, 0, 200)
+    else
+        hitResponseMode = "AUTO_RETREAT"
+        HitModeBtn.Text = "⚔️ HIT MODE: AUTO RETREAT (0.25s)"
+        HitModeBtn.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+    end
+end)
 
 NormalModeBtn.MouseButton1Click:Connect(function() setCombatMode("Normal") end)
 CautiousModeBtn.MouseButton1Click:Connect(function() setCombatMode("Cautious") end)
@@ -471,12 +504,18 @@ local function onSoundTriggered(soundCategory)
     end
     lastSoundTriggerTime[soundCategory] = now
 
-    -- === ถอยหลังเฉพาะเมื่ออยู่ในโหมดระวัง (Cautious Mode) + ระบบหยุดกะทันหันทันทีเมื่อตีซ้ำ ===
+    -- === ประมวลผลเมื่อตีโดน (เฉพาะ Cautious Mode เท่านั้น) ===
     if soundCategory == "WEAPON_HIT" then
         if currentModeKey == "Cautious" then
-            triggerHitRetreat(WEAPON_HIT_RETREAT_DURATION)
-            StatusLabel.Text = "🛡️ CAUTIOUS HIT! INSTANT RETREAT RESET (0.25s)"
-            StatusLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+            triggerHitResponse()
+            
+            if hitResponseMode == "AUTO_RETREAT" then
+                StatusLabel.Text = "🛡️ HIT! INSTANT STOP + AUTO RETREAT (0.25s)"
+                StatusLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+            else
+                StatusLabel.Text = "🛑 HIT! INSTANT STOPPED (MANUAL RETREAT)"
+                StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 0)
+            end
         end
         return
     end
