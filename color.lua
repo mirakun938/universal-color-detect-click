@@ -45,7 +45,7 @@ local KICK_HIT_PAUSE = 0.5
 local BURST2_PAUSE_DURATION = 0.25            
 local BURST3_PAUSE_DURATION = 0.5             
 local RETREAT_DURATION = 1.0                  
-local WEAPON_HIT_RETREAT_DURATION = 0.25      -- ระยะเวลาถอยหลังอัตโนมัติ (0.25s)
+local WEAPON_HIT_RETREAT_DURATION = 0.25      
 
 local PRESS_BURST_THRESHOLD = 3               
 local BURST_TIME_WINDOW = 0.6                
@@ -77,12 +77,73 @@ local damageTimestamps = {}
 local lastQEvadeTime = 0
 local lastHealth = 100
 
--- ตัวแปรควบคุม thread สำหรับการถอยหลังเมื่อตีอาวุธ
 local hitRetreatThread = nil
 
 local myChar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local myRoot = myChar:WaitForChild("HumanoidRootPart", 5)
 local myHumanoid = myChar:WaitForChild("Humanoid", 5)
+
+--------------------------------------------------------------------------------
+-- ฟังก์ชันค้นหา RemoteInteract และข้อมูลอาวุธที่กำลังถือ
+--------------------------------------------------------------------------------
+local function getInteractRemote()
+    if not myChar then return nil end
+    local charHandler = myChar:FindFirstChild("CharacterHandler")
+    if not charHandler then return nil end
+    local contents = charHandler:FindFirstChild("Contents")
+    if not contents then return nil end
+    local remotes = contents:FindFirstChild("Remotes")
+    if not remotes then return nil end
+    return remotes:FindFirstChild("Interact")
+end
+
+local function getEquippedWeaponData()
+    if not myChar then return nil, nil, nil end
+    
+    -- ค้นหา Tool หรือ อาวุธใน Character
+    local tool = myChar:FindFirstChildOfClass("Tool")
+    if not tool then
+        -- ถ้าในตัวไม่มี Tool ให้ลองค้นหาโมเดลอาวุธที่โมเดลตัวละครถืออยู่
+        for _, child in ipairs(myChar:GetChildren()) do
+            if child:IsA("Model") and (child:FindFirstChild("GUID") or child:GetAttribute("GUID")) then
+                tool = child
+                break
+            end
+        end
+    end
+
+    local weaponName = "MacheteUpgraded"
+    local weaponGuid = "95a863ff-b267-4c60-a537-020ebee690fe" -- Default Fallback GUID
+
+    if tool then
+        weaponName = tool.Name
+        local guidObj = tool:FindFirstChild("GUID") or tool:FindFirstChild("ID")
+        if guidObj and guidObj:IsA("StringValue") then
+            weaponGuid = guidObj.Value
+        elseif tool:GetAttribute("GUID") then
+            weaponGuid = tool:GetAttribute("GUID")
+        end
+    end
+
+    -- กำหนด Action ตามประเภทอาวุธ
+    local actionName = weaponName .. "Swing"
+    if weaponName:find("Swing") then
+        actionName = weaponName
+    end
+
+    return actionName, {"Swing1"}, weaponGuid
+end
+
+--------------------------------------------------------------------------------
+-- ฟังก์ชันยิง Remote แทนการกด LMB
+--------------------------------------------------------------------------------
+local function fireAttackRemote()
+    local interactRemote = getInteractRemote()
+    if interactRemote then
+        local actionName, swingTable, weaponGuid = getEquippedWeaponData()
+        interactRemote:FireServer(actionName, swingTable, weaponGuid)
+    end
+end
 
 --------------------------------------------------------------------------------
 -- ฟังก์ชันค้นหาบอส/NPC
@@ -111,7 +172,6 @@ end
 local function stopMovementInstantly()
     VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
     if myRoot and myRoot.Parent then
-        -- ล้างแรงเคลื่อนที่เฉื่อยออกทันทีเพื่อไม่ให้มีอาการสไลด์ชะลอตัว
         myRoot.AssemblyLinearVelocity = Vector3.new(0, myRoot.AssemblyLinearVelocity.Y, 0)
     end
 end
@@ -136,10 +196,8 @@ local function triggerHitResponse()
         hitRetreatThread = nil
     end
 
-    -- หยุดตัวละครกะทันหันทันทีในทุกกรณี
     stopMovementInstantly()
 
-    -- หากเลือกโหมดถอยหลังอัตโนมัติ ให้รันคำสั่งกด S ต่อเป็นเวลา 0.25s
     if hitResponseMode == "AUTO_RETREAT" then
         hitRetreatThread = task.spawn(function()
             task.wait(0.01)
@@ -317,9 +375,9 @@ HoldButton.Position = UDim2.new(0.5, 0, 0.5, 0)
 HoldButton.Size = UDim2.new(0, 90, 0, 90)
 HoldButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
 HoldButton.BackgroundTransparency = 0.3
-HoldButton.Text = "HOLD TO\nSPAM LMB"
+HoldButton.Text = "HOLD TO\nSPAM REMOTE"
 HoldButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-HoldButton.TextSize = 14
+HoldButton.TextSize = 13
 HoldButton.Font = Enum.Font.SourceSansBold
 HoldButton.Active = true
 HoldButton.Draggable = not isLocked
@@ -504,7 +562,6 @@ local function onSoundTriggered(soundCategory)
     end
     lastSoundTriggerTime[soundCategory] = now
 
-    -- === ประมวลผลเมื่อตีโดน (เฉพาะ Cautious Mode เท่านั้น) ===
     if soundCategory == "WEAPON_HIT" then
         if currentModeKey == "Cautious" then
             triggerHitResponse()
@@ -683,18 +740,8 @@ RunService.Heartbeat:Connect(function()
 end)
 
 --------------------------------------------------------------------------------
--- ลูปสแปมเมาส์ซ้าย (LMB Attack Loop)
+-- ลูปสแปม Remote โจมตี (Remote Attack Loop)
 --------------------------------------------------------------------------------
-local function clickLMB()
-    local viewportSize = Camera.ViewportSize
-    local centerX = viewportSize.X / 2
-    local centerY = viewportSize.Y / 2
-
-    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 0)
-    task.wait(0.01)
-    VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 0)
-end
-
 local function startSpam()
     task.spawn(function()
         while isHolding do
@@ -703,11 +750,11 @@ local function startSpam()
             if currentTime < pauseEndTime then
                 HoldButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
             else
-                StatusLabel.Text = "⚔ SPAMMING ATTACK..."
+                StatusLabel.Text = "⚔ SPAMMING REMOTE ATTACK..."
                 StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
                 HoldButton.BackgroundColor3 = Color3.fromRGB(50, 220, 50)
                 
-                clickLMB()
+                fireAttackRemote()
             end
 
             task.wait(SPAM_SPEED)
